@@ -7,6 +7,7 @@ import com.vrtechnologies.vrtech.entity.WishlistItem;
 import com.vrtechnologies.vrtech.repository.ProductRepository;
 import com.vrtechnologies.vrtech.repository.WishlistItemRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -51,6 +52,7 @@ public class WishlistService {
         return getWishlist();
     }
 
+    @Transactional
     public List<ProductResponse> removeFromWishlist(Long productId) {
         User user = userContextService.getCurrentUser();
         wishlistItemRepository.deleteByUserIdAndProductId(user.getId(), productId);

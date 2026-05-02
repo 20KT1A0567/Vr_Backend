@@ -1,8 +1,11 @@
 package com.vrtechnologies.vrtech.entity;
 
+import com.vrtechnologies.vrtech.config.JsonMapConverter;
 import com.vrtechnologies.vrtech.entity.enums.ProductCondition;
+import com.vrtechnologies.vrtech.entity.enums.ProductStatus;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -21,7 +24,10 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 
 @Getter
@@ -95,6 +101,10 @@ public class Product extends BaseEntity {
     @Enumerated(EnumType.STRING)
     private ProductCondition productCondition;
 
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private ProductStatus productStatus;
+
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
 
@@ -112,11 +122,36 @@ public class Product extends BaseEntity {
     @Column(nullable = false)
     private boolean featured = false;
 
+    private Boolean bestSeller;
+
+    private Boolean todayDeal;
+
+    private LocalDateTime dealStartDate;
+
+    private LocalDateTime dealEndDate;
+
+    private Integer displayOrder;
+
     @Column(length = 500)
     private String videoUrl;
 
+    @Column(length = 255)
+    private String seoTitle;
+
+    @Column(length = 500)
+    private String seoDescription;
+
+    @Column(length = 500)
+    private String seoKeywords;
+
+    private Integer lowStockThreshold;
+
     @Column(columnDefinition = "TEXT")
     private String description;
+
+    @Convert(converter = JsonMapConverter.class)
+    @Column(columnDefinition = "LONGTEXT")
+    private Map<String, Object> customAttributes = new LinkedHashMap<>();
 
     @ManyToMany
     @JoinTable(
@@ -129,4 +164,24 @@ public class Product extends BaseEntity {
     @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("sortOrder ASC, id ASC")
     private Set<ProductImage> images = new LinkedHashSet<>();
+
+    public ProductStatus getEffectiveProductStatus() {
+        return productStatus == null ? ProductStatus.ACTIVE : productStatus;
+    }
+
+    public boolean isBestSellerEnabled() {
+        return Boolean.TRUE.equals(bestSeller);
+    }
+
+    public boolean isTodayDealEnabled() {
+        return Boolean.TRUE.equals(todayDeal);
+    }
+
+    public int getResolvedDisplayOrder() {
+        return displayOrder == null ? 0 : displayOrder;
+    }
+
+    public int getResolvedLowStockThreshold() {
+        return lowStockThreshold == null ? 5 : lowStockThreshold;
+    }
 }

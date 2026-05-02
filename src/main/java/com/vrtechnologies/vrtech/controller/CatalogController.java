@@ -1,12 +1,14 @@
 package com.vrtechnologies.vrtech.controller;
 
 import com.vrtechnologies.vrtech.dto.response.ApiResponse;
-import com.vrtechnologies.vrtech.entity.Banner;
+import com.vrtechnologies.vrtech.dto.response.BannerResponse;
 import com.vrtechnologies.vrtech.entity.Brand;
 import com.vrtechnologies.vrtech.entity.Category;
 import com.vrtechnologies.vrtech.entity.Store;
+import com.vrtechnologies.vrtech.entity.enums.BannerPlacement;
 import com.vrtechnologies.vrtech.service.CatalogService;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -37,7 +39,7 @@ public class CatalogController {
     }
 
     @GetMapping("/api/banners")
-    public ApiResponse<List<Banner>> banners() {
-        return ApiResponse.ok("Banners fetched", catalogService.getBanners());
+    public ApiResponse<List<BannerResponse>> banners(@RequestParam(required = false) BannerPlacement placement) {
+        return ApiResponse.ok("Banners fetched", catalogService.getBanners(false, placement));
     }
 }

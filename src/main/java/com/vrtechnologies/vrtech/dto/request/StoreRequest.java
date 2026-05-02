@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.math.BigDecimal;
+
 @Getter
 @Setter
 public class StoreRequest {
@@ -13,6 +15,10 @@ public class StoreRequest {
 
     @NotBlank
     private String address;
+
+    private String landmark;
+
+    private String postalCode;
 
     @NotBlank
     private String city;
@@ -27,5 +33,7 @@ public class StoreRequest {
     private String mapLink;
     private String imageUrl;
     private String videoUrl;
+    private BigDecimal googleRating;
+    private Integer googleReviewCount;
     private Boolean active;
 }

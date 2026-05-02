@@ -1,6 +1,8 @@
 package com.vrtechnologies.vrtech.controller;
 
 import com.vrtechnologies.vrtech.dto.request.LoginRequest;
+import com.vrtechnologies.vrtech.dto.request.LogoutRequest;
+import com.vrtechnologies.vrtech.dto.request.RefreshTokenRequest;
 import com.vrtechnologies.vrtech.dto.request.RegisterRequest;
 import com.vrtechnologies.vrtech.dto.response.ApiResponse;
 import com.vrtechnologies.vrtech.dto.response.AuthResponse;
@@ -30,6 +32,17 @@ public class AuthController {
     @PostMapping("/login")
     public ApiResponse<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
         return ApiResponse.ok("Login successful", authService.login(request));
+    }
+
+    @PostMapping("/refresh")
+    public ApiResponse<AuthResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        return ApiResponse.ok("Token refreshed", authService.refresh(request));
+    }
+
+    @PostMapping("/logout")
+    public ApiResponse<Object> logout(@Valid @RequestBody LogoutRequest request) {
+        authService.logout(request);
+        return ApiResponse.ok("Logout successful", null);
     }
 
     @GetMapping("/me")

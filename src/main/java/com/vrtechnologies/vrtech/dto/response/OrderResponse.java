@@ -16,6 +16,8 @@ import java.util.List;
 public class OrderResponse {
 
     private Long id;
+    private String orderNumber;
+    private String invoiceNumber;
     private BigDecimal totalAmount;
     private OrderStatus status;
     private DeliveryType deliveryType;
@@ -27,6 +29,14 @@ public class OrderResponse {
     private String contactEmail;
     private String deliveryAddress;
     private String notes;
+    private String cancellationReason;
+    private String returnReason;
+    private LocalDateTime paidAt;
+    private LocalDateTime deliveredAt;
+    private LocalDateTime cancelledAt;
+    private LocalDateTime returnRequestedAt;
+    private PaymentTransactionResponse latestPayment;
+    private List<OrderTimelineEventResponse> timeline;
     private List<OrderItemResponse> items;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

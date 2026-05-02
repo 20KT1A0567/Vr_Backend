@@ -1,12 +1,15 @@
 package com.vrtechnologies.vrtech.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.vrtechnologies.vrtech.entity.enums.ProductCondition;
+import com.vrtechnologies.vrtech.entity.enums.ProductStatus;
 import lombok.Builder;
 import lombok.Getter;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @Getter
 @Builder
@@ -38,16 +41,47 @@ public class ProductResponse {
     private String sku;
     private String serialNumber;
     private ProductCondition productCondition;
+    private ProductStatus productStatus;
     private BigDecimal price;
     private BigDecimal originalPrice;
     private Integer discountPercent;
     private Integer stockQuantity;
     private boolean available;
     private boolean featured;
+    private boolean bestSeller;
+    private boolean todayDeal;
+    private LocalDateTime dealStartDate;
+    private LocalDateTime dealEndDate;
+    private Integer displayOrder;
     private String videoUrl;
+    private String seoTitle;
+    private String seoDescription;
+    private String seoKeywords;
+    private Integer lowStockThreshold;
     private String description;
+    private Map<String, Object> customAttributes;
     private List<StoreSummaryResponse> stores;
     private List<ProductImageResponse> images;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    @JsonProperty("discountPercentage")
+    public Integer getDiscountPercentage() {
+        return discountPercent;
+    }
+
+    @JsonProperty("isFeatured")
+    public boolean getIsFeatured() {
+        return featured;
+    }
+
+    @JsonProperty("isBestSeller")
+    public boolean getIsBestSeller() {
+        return bestSeller;
+    }
+
+    @JsonProperty("isTodayDeal")
+    public boolean getIsTodayDeal() {
+        return todayDeal;
+    }
 }

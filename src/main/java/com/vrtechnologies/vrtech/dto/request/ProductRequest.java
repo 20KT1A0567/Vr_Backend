@@ -1,6 +1,8 @@
 package com.vrtechnologies.vrtech.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.vrtechnologies.vrtech.entity.enums.ProductCondition;
+import com.vrtechnologies.vrtech.entity.enums.ProductStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -10,7 +12,9 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @Getter
 @Setter
@@ -46,17 +50,37 @@ public class ProductRequest {
     private String sku;
     private String serialNumber;
     private ProductCondition productCondition;
+    private ProductStatus productStatus;
 
     @NotNull
     private BigDecimal price;
 
     private BigDecimal originalPrice;
+
+    @JsonAlias("discountPercentage")
     private Integer discountPercent;
+
     private Integer stockQuantity;
     private Boolean available;
+
+    @JsonAlias("isFeatured")
     private Boolean featured;
+
+    @JsonAlias("isBestSeller")
+    private Boolean bestSeller;
+
+    @JsonAlias("isTodayDeal")
+    private Boolean todayDeal;
+    private LocalDateTime dealStartDate;
+    private LocalDateTime dealEndDate;
+    private Integer displayOrder;
     private String videoUrl;
+    private String seoTitle;
+    private String seoDescription;
+    private String seoKeywords;
+    private Integer lowStockThreshold;
     private String description;
+    private Map<String, Object> customAttributes;
 
     @Valid
     @Size(max = 20)

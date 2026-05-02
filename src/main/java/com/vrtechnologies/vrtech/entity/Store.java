@@ -11,6 +11,7 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -30,6 +31,10 @@ public class Store {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String address;
 
+    private String landmark;
+
+    private String postalCode;
+
     @Column(nullable = false)
     private String city;
 
@@ -47,6 +52,11 @@ public class Store {
     private String imageUrl;
 
     private String videoUrl;
+
+    @Column(precision = 3, scale = 1)
+    private BigDecimal googleRating;
+
+    private Integer googleReviewCount;
 
     @Column(nullable = false)
     private boolean active = true;

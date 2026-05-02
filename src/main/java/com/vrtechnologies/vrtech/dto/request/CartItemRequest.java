@@ -12,6 +12,7 @@ public class CartItemRequest {
     @NotNull
     private Long productId;
 
+    @NotNull
     @Min(1)
     private Integer quantity = 1;
 }

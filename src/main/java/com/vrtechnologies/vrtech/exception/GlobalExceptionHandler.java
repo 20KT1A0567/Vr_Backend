@@ -38,9 +38,15 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.error("Validation failed", errors));
     }
 
-    @ExceptionHandler({JwtException.class, AccessDeniedException.class})
+    @ExceptionHandler(JwtException.class)
     public ResponseEntity<ApiResponse<Object>> handleUnauthorized(Exception exception) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.error(exception.getMessage(), null));
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Object>> handleForbidden(AccessDeniedException exception) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ApiResponse.error(exception.getMessage(), null));
     }
 

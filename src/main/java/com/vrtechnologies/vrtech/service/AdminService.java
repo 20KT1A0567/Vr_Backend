@@ -18,6 +18,7 @@ import com.vrtechnologies.vrtech.entity.Store;
 import com.vrtechnologies.vrtech.entity.User;
 import com.vrtechnologies.vrtech.entity.enums.EnquiryStatus;
 import com.vrtechnologies.vrtech.entity.enums.OrderStatus;
+import com.vrtechnologies.vrtech.entity.enums.Role;
 import com.vrtechnologies.vrtech.exception.BadRequestException;
 import com.vrtechnologies.vrtech.exception.ResourceNotFoundException;
 import com.vrtechnologies.vrtech.repository.CouponRepository;
@@ -40,6 +41,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class AdminService {
@@ -51,6 +55,7 @@ public class AdminService {
     private final StoreRepository storeRepository;
     private final CouponRepository couponRepository;
     private final SiteSettingsRepository siteSettingsRepository;
+    private final PermissionService permissionService;
 
     public AdminService(
             ProductRepository productRepository,
@@ -59,7 +64,8 @@ public class AdminService {
             EnquiryRepository enquiryRepository,
             StoreRepository storeRepository,
             CouponRepository couponRepository,
-            SiteSettingsRepository siteSettingsRepository
+            SiteSettingsRepository siteSettingsRepository,
+            PermissionService permissionService
     ) {
         this.productRepository = productRepository;
         this.userRepository = userRepository;
@@ -68,15 +74,29 @@ public class AdminService {
         this.storeRepository = storeRepository;
         this.couponRepository = couponRepository;
         this.siteSettingsRepository = siteSettingsRepository;
+        this.permissionService = permissionService;
     }
 
-    public DashboardStatsResponse getDashboardStats() {
-        List<CustomerOrder> orders = customerOrderRepository.findAll();
-        List<Product> products = productRepository.findAll();
-        List<Store> stores = storeRepository.findAllByOrderByCityAscNameAsc();
+    public DashboardStatsResponse getDashboardStats(User admin) {
+        List<Long> accessibleStoreIds = permissionService.accessibleStoreIds(admin);
+        List<CustomerOrder> orders = customerOrderRepository.findAll().stream()
+                .filter(order -> accessibleStoreIds.isEmpty() || (order.getStore() != null && accessibleStoreIds.contains(order.getStore().getId())))
+                .toList();
+        List<Product> products = productRepository.findAll().stream()
+                .filter(product -> accessibleStoreIds.isEmpty()
+                        || product.getStores().stream().map(Store::getId).anyMatch(accessibleStoreIds::contains))
+                .toList();
+        List<Store> stores = storeRepository.findAllByOrderByCityAscNameAsc().stream()
+                .filter(store -> accessibleStoreIds.isEmpty() || accessibleStoreIds.contains(store.getId()))
+                .toList();
+        List<com.vrtechnologies.vrtech.entity.Enquiry> enquiries = enquiryRepository.findAll().stream()
+                .filter(enquiry -> accessibleStoreIds.isEmpty()
+                        || (enquiry.getProduct() != null
+                        && enquiry.getProduct().getStores().stream().map(Store::getId).anyMatch(accessibleStoreIds::contains)))
+                .toList();
 
         BigDecimal totalRevenue = orders.stream()
-                .filter(order -> order.getStatus() == OrderStatus.DELIVERED)
+                .filter(order -> order.getStatus() == OrderStatus.DELIVERED && order.getPaymentStatus() != com.vrtechnologies.vrtech.entity.enums.PaymentStatus.REFUNDED)
                 .map(order -> order.getTotalAmount() == null ? BigDecimal.ZERO : order.getTotalAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -88,16 +108,28 @@ public class AdminService {
                 .filter(product -> product.getStockQuantity() != null && product.getStockQuantity() <= 5)
                 .count();
         List<DashboardRecentOrderResponse> recentOrders = buildRecentOrders(orders);
+        long totalUsers = orders.stream()
+                .map(order -> order.getUser().getId())
+                .filter(id -> id != null)
+                .distinct()
+                .count();
+        long pendingOrders = orders.stream()
+                .filter(order -> switch (order.getStatus()) {
+                    case PENDING, CONFIRMED, PACKED, SHIPPED, READY -> true;
+                    default -> false;
+                })
+                .count();
+        long newEnquiries = enquiries.stream().filter(enquiry -> enquiry.getStatus() == EnquiryStatus.NEW).count();
 
         return DashboardStatsResponse.builder()
                 .totalProducts(products.size())
-                .totalUsers(userRepository.count())
+                .totalUsers(totalUsers)
                 .totalOrders(orders.size())
                 .totalStores(stores.size())
                 .activeStores(stores.stream().filter(Store::isActive).count())
                 .totalRevenue(totalRevenue)
-                .newEnquiries(enquiryRepository.countByStatus(EnquiryStatus.NEW))
-                .pendingOrders(customerOrderRepository.countByStatus(OrderStatus.PENDING))
+                .newEnquiries(newEnquiries)
+                .pendingOrders(pendingOrders)
                 .lowStockProducts(lowStockProductsCount)
                 .orderStatuses(orderStatuses)
                 .storeSales(storeSales)
@@ -107,13 +139,20 @@ public class AdminService {
                 .build();
     }
 
-    public List<UserSummaryResponse> getUsers() {
-        return userRepository.findAll().stream().map(this::toResponse).toList();
+    public List<UserSummaryResponse> getUsers(User admin) {
+        List<Long> accessibleStoreIds = permissionService.accessibleStoreIds(admin);
+        return userRepository.findAll().stream()
+                .filter(user -> canAccessUser(accessibleStoreIds, user))
+                .map(this::toResponse)
+                .toList();
     }
 
-    public UserSummaryResponse toggleUser(Long id) {
+    public UserSummaryResponse toggleUser(User admin, Long id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        if (!canAccessUser(permissionService.accessibleStoreIds(admin), user)) {
+            throw new ResourceNotFoundException("User not found");
+        }
         user.setActive(!user.isActive());
         return toResponse(userRepository.save(user));
     }
@@ -214,7 +253,7 @@ public class AdminService {
         }
 
         for (CustomerOrder order : orders) {
-            if (order.getStore() == null || order.getStatus() == OrderStatus.CANCELLED) {
+            if (order.getStore() == null || order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.REFUNDED) {
                 continue;
             }
 
@@ -243,7 +282,7 @@ public class AdminService {
     private List<DashboardTopProductResponse> buildTopProducts(List<CustomerOrder> orders) {
         Map<Long, ProductAccumulator> productAccumulators = new HashMap<>();
         for (CustomerOrder order : orders) {
-            if (order.getStatus() == OrderStatus.CANCELLED) {
+            if (order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.REFUNDED) {
                 continue;
             }
 
@@ -317,7 +356,7 @@ public class AdminService {
 
         SiteSettings settings = new SiteSettings();
         settings.setCompanyName("VR Technologies");
-        settings.setSupportEmail(adminUser != null ? adminUser.getEmail() : "admin@vrtech.in");
+        settings.setSupportEmail(adminUser != null ? adminUser.getEmail() : "superadmin@vrtechnologies.com");
         settings.setSupportPhone(primaryStore != null ? primaryStore.getPhone() : "");
         settings.setShippingNote("Standard delivery in 3-5 working days.");
         settings.setReturnPolicy("7-day easy returns on eligible products.");
@@ -333,6 +372,20 @@ public class AdminService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private boolean canAccessUser(List<Long> accessibleStoreIds, User user) {
+        if (accessibleStoreIds == null || accessibleStoreIds.isEmpty()) {
+            return true;
+        }
+        if (user == null || user.getRole() != Role.USER) {
+            return false;
+        }
+        return customerOrderRepository.findByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+                .map(CustomerOrder::getStore)
+                .filter(Objects::nonNull)
+                .map(Store::getId)
+                .anyMatch(accessibleStoreIds::contains);
     }
 
     private static final class StoreAccumulator {

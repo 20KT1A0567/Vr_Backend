@@ -22,6 +22,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -42,6 +43,12 @@ public class CustomerOrder extends BaseEntity {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "store_id")
     private Store store;
+
+    @Column(length = 40, unique = true)
+    private String orderNumber;
+
+    @Column(length = 40, unique = true)
+    private String invoiceNumber;
 
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
@@ -74,7 +81,29 @@ public class CustomerOrder extends BaseEntity {
     @Column(columnDefinition = "TEXT")
     private String notes;
 
+    private LocalDateTime paidAt;
+
+    private LocalDateTime deliveredAt;
+
+    private LocalDateTime cancelledAt;
+
+    @Column(columnDefinition = "TEXT")
+    private String cancellationReason;
+
+    private LocalDateTime returnRequestedAt;
+
+    @Column(columnDefinition = "TEXT")
+    private String returnReason;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("id ASC")
     private Set<OrderItem> items = new LinkedHashSet<>();
+
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("createdAt DESC, id DESC")
+    private Set<PaymentTransaction> paymentTransactions = new LinkedHashSet<>();
+
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("createdAt ASC, id ASC")
+    private Set<OrderTimelineEvent> timelineEvents = new LinkedHashSet<>();
 }

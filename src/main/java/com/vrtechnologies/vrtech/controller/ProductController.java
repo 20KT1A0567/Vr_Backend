@@ -40,6 +40,8 @@ public class ProductController {
             @RequestParam(required = false) String processor,
             @RequestParam(required = false) List<String> processorOptions,
             @RequestParam(required = false) ProductCondition condition,
+            @RequestParam(required = false) List<ProductCondition> conditions,
+            @RequestParam(required = false) Boolean inStock,
             @RequestParam(required = false) BigDecimal minPrice,
             @RequestParam(required = false) BigDecimal maxPrice
     ) {
@@ -53,7 +55,8 @@ public class ProductController {
                         mergeParamValues(ramGb, ramOptions),
                         mergeParamValues(storageGb, storageOptions),
                         mergeParamValues(processor, processorOptions),
-                        condition,
+                        mergeParamValues(condition, conditions),
+                        inStock,
                         minPrice,
                         maxPrice
                 )

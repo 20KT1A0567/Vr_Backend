@@ -7,12 +7,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 @Configuration
 public class AdminSeedConfig {
 
     @Bean
+    @Order(2)
     public CommandLineRunner seedAdminUser(
             UserRepository userRepository,
             PasswordEncoder passwordEncoder,
@@ -30,7 +32,8 @@ public class AdminSeedConfig {
             admin.setName(adminName);
             admin.setEmail(adminEmail.trim().toLowerCase());
             admin.setPassword(passwordEncoder.encode(adminPassword));
-            admin.setRole(Role.ADMIN);
+            admin.setRole(Role.SUPER_ADMIN);
+            admin.setAdminRoleKey(Role.SUPER_ADMIN.name());
             admin.setActive(true);
             userRepository.save(admin);
         };

@@ -656,12 +656,9 @@ public class ProductService {
     }
 
     private Specification<Product> publicVisibility() {
-        return (root, query, criteriaBuilder) -> criteriaBuilder.and(
-                criteriaBuilder.equal(root.get("available"), true),
-                criteriaBuilder.or(
-                        criteriaBuilder.isNull(root.get("productStatus")),
-                        criteriaBuilder.equal(root.get("productStatus"), ProductStatus.ACTIVE)
-                )
+        return (root, query, criteriaBuilder) -> criteriaBuilder.or(
+                criteriaBuilder.isNull(root.get("productStatus")),
+                criteriaBuilder.equal(root.get("productStatus"), ProductStatus.ACTIVE)
         );
     }
 

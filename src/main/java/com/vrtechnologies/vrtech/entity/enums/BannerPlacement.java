@@ -4,5 +4,6 @@ public enum BannerPlacement {
     HOME_HERO,
     HOME_MIDDLE,
     CATEGORY,
-    PRODUCT_DETAIL
+    PRODUCT_DETAIL,
+    USE_CASE
 }

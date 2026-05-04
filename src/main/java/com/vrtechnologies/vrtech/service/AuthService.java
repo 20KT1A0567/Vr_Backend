@@ -1,7 +1,12 @@
 package com.vrtechnologies.vrtech.service;
 
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseAuthException;
+import com.google.firebase.auth.FirebaseToken;
 import com.vrtechnologies.vrtech.dto.request.LoginRequest;
 import com.vrtechnologies.vrtech.dto.request.LogoutRequest;
+import com.vrtechnologies.vrtech.dto.request.PhoneVerifyRequest;
 import com.vrtechnologies.vrtech.dto.request.RefreshTokenRequest;
 import com.vrtechnologies.vrtech.dto.request.RegisterRequest;
 import com.vrtechnologies.vrtech.dto.response.AuthResponse;
@@ -22,10 +27,12 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -119,6 +126,58 @@ public class AuthService {
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
         String accessToken = jwtService.generateAccessToken(userDetails);
         return toAuthResponse(user, accessToken, sessionToken);
+    }
+
+    public AuthResponse verifyPhone(PhoneVerifyRequest request) {
+        if (FirebaseApp.getApps().isEmpty()) {
+            throw new BadRequestException("Phone login is not configured on this server");
+        }
+
+        FirebaseToken decoded;
+        try {
+            decoded = FirebaseAuth.getInstance().verifyIdToken(request.getIdToken());
+        } catch (FirebaseAuthException ex) {
+            throw new BadRequestException("Invalid OTP token");
+        }
+
+        String phone = (String) decoded.getClaims().get("phone_number");
+        if (phone == null || phone.isBlank()) {
+            throw new BadRequestException("Phone number not present in verification token");
+        }
+
+        User user = userRepository.findByPhone(phone).orElseGet(() -> createPhoneUser(phone));
+
+        if (user.getRole() != Role.USER) {
+            throw new BadRequestException("Admin accounts must sign in with email and password");
+        }
+        if (!user.isActive()) {
+            throw new BadRequestException("Your account is disabled");
+        }
+
+        user.setLastLoginAt(LocalDateTime.now());
+        user = userRepository.save(user);
+
+        AuthSessionService.SessionToken sessionToken = authSessionService.createSession(user);
+        UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
+        String accessToken = jwtService.generateAccessToken(userDetails);
+        return toAuthResponse(user, accessToken, sessionToken);
+    }
+
+    private User createPhoneUser(String phone) {
+        User user = new User();
+        user.setPhone(phone);
+        user.setName("Customer");
+        user.setEmail(phone + "@phone.anushabazaar.local");
+        user.setPassword(passwordEncoder.encode(generateRandomSecret()));
+        user.setRole(Role.USER);
+        user.setActive(true);
+        return userRepository.save(user);
+    }
+
+    private String generateRandomSecret() {
+        byte[] bytes = new byte[32];
+        new SecureRandom().nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     public AuthResponse refresh(RefreshTokenRequest request) {

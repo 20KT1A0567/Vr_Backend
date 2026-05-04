@@ -30,7 +30,7 @@ public class Banner {
     @Column(length = 500)
     private String subtitle;
 
-    @Column(nullable = false, length = 500)
+    @Column(length = 500)
     private String imageUrl;
 
     @Column(length = 500)

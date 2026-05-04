@@ -6,15 +6,8 @@ import lombok.Setter;
 
 @Getter
 @Setter
-public class CategoryRequest {
+public class PhoneVerifyRequest {
 
     @NotBlank
-    private String name;
-
-    @NotBlank
-    private String slug;
-
-    private String iconUrl;
-
-    private String compareFields;
+    private String idToken;
 }

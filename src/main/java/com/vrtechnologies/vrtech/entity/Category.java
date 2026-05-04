@@ -26,4 +26,7 @@ public class Category {
     private String slug;
 
     private String iconUrl;
+
+    @Column(name = "compare_fields", length = 1000)
+    private String compareFields;
 }

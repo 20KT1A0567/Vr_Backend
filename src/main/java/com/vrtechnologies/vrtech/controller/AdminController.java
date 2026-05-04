@@ -26,6 +26,7 @@ import com.vrtechnologies.vrtech.entity.enums.OrderStatus;
 import com.vrtechnologies.vrtech.entity.enums.PaymentStatus;
 import com.vrtechnologies.vrtech.entity.enums.PermissionAction;
 import com.vrtechnologies.vrtech.entity.User;
+import com.vrtechnologies.vrtech.exception.BadRequestException;
 import com.vrtechnologies.vrtech.service.AdminService;
 import com.vrtechnologies.vrtech.service.CatalogService;
 import com.vrtechnologies.vrtech.service.CloudinaryService;
@@ -297,7 +298,18 @@ public class AdminController {
     @PostMapping("/media/upload")
     public ApiResponse<MediaUploadResponse> uploadMedia(@RequestParam("file") MultipartFile file, @RequestParam(defaultValue = "general") String folder) {
         requireAnyMediaPermission(currentAdmin());
-        return ApiResponse.ok("Media uploaded", cloudinaryService.uploadImage(file, folder));
+        String contentType = file != null ? file.getContentType() : null;
+        if (contentType == null) {
+            throw new BadRequestException("File type could not be detected");
+        }
+        String normalizedType = contentType.toLowerCase(Locale.ROOT);
+        if (normalizedType.startsWith("image/")) {
+            return ApiResponse.ok("Media uploaded", cloudinaryService.uploadImage(file, folder));
+        }
+        if (normalizedType.startsWith("video/")) {
+            return ApiResponse.ok("Media uploaded", cloudinaryService.uploadMedia(file, folder));
+        }
+        throw new BadRequestException("Only image or video files are allowed");
     }
 
     @DeleteMapping("/media")

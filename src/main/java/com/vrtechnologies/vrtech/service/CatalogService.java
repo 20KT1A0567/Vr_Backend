@@ -167,6 +167,7 @@ public class CatalogService {
         category.setName(request.getName());
         category.setSlug(request.getSlug());
         category.setIconUrl(request.getIconUrl());
+        category.setCompareFields(request.getCompareFields());
         try {
             return categoryRepository.save(category);
         } catch (DataIntegrityViolationException exception) {
@@ -245,7 +246,7 @@ public class CatalogService {
             throw new BadRequestException("Banner end date must be after start date");
         }
 
-        if (desktopImageUrl == null) {
+        if (mediaType == BannerMediaType.IMAGE && desktopImageUrl == null) {
             throw new BadRequestException("Banner desktop image is required");
         }
 

@@ -1,5 +1,4 @@
 package com.vrtechnologies.vrtech.dto.response;
-
 import com.vrtechnologies.vrtech.entity.enums.Role;
 import lombok.Builder;
 import lombok.Getter;

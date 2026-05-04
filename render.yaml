@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: vrtech-backend
+    runtime: docker
+    plan: starter
+    region: singapore
+    branch: main
+    healthCheckPath: /actuator/health
+    autoDeployTrigger: commit

@@ -32,13 +32,13 @@ public class User extends BaseEntity {
     @Column(nullable = false)
     private String name;
 
-    @Column(nullable = false, unique = true)
+    @Column(unique = true)
     private String email;
 
-    @Column(nullable = false)
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;
 
+    @Column(unique = true, length = 32)
     private String phone;
 
     @Enumerated(EnumType.STRING)

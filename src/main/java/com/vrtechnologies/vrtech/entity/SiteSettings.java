@@ -24,23 +24,23 @@ public class SiteSettings extends BaseEntity {
     @Column(nullable = false)
     private String companyName;
 
-    @Column(length = 500)
+    @Column(name = "logo_url", columnDefinition = "TEXT")
     private String logoUrl;
 
-    @Column(length = 500)
+    @Column(name = "favicon_url", columnDefinition = "TEXT")
     private String faviconUrl;
 
-    @Column(length = 180)
+    @Column(name = "tagline", columnDefinition = "TEXT")
     private String tagline;
 
-    @Column(length = 1000)
+    @Column(name = "footer_description", columnDefinition = "TEXT")
     private String footerDescription;
 
     private String supportEmail;
 
     private String supportPhone;
 
-    @Column(length = 1000)
+    @Column(name = "shipping_note", columnDefinition = "TEXT")
     private String shippingNote;
 
     @Column(nullable = false)
@@ -55,10 +55,10 @@ public class SiteSettings extends BaseEntity {
     @Column(precision = 10, scale = 2)
     private BigDecimal freeDeliveryThreshold;
 
-    @Column(length = 2000)
+    @Column(name = "state_delivery_charges", columnDefinition = "TEXT")
     private String stateDeliveryCharges;
 
-    @Column(length = 2000)
+    @Column(name = "state_delivery_windows", columnDefinition = "TEXT")
     private String stateDeliveryWindows;
 
     @Column(nullable = false)
@@ -79,7 +79,7 @@ public class SiteSettings extends BaseEntity {
     @Column(length = 20)
     private String defaultHsnCode;
 
-    @Column(length = 500)
+    @Column(name = "company_address", columnDefinition = "TEXT")
     private String companyAddress;
 
     @Column(length = 20)
@@ -94,23 +94,23 @@ public class SiteSettings extends BaseEntity {
     @Column(name = "invoice_padding", nullable = false)
     private Integer invoicePadding = 6;
 
-    @Column(name = "invoice_terms", length = 2000)
+    @Column(name = "invoice_terms", columnDefinition = "TEXT")
     private String invoiceTerms;
 
-    @Column(length = 1000)
+    @Column(name = "return_policy", columnDefinition = "TEXT")
     private String returnPolicy;
 
     private String defaultCity;
 
     private String defaultState;
 
-    @Column(length = 500)
+    @Column(name = "map_link", columnDefinition = "TEXT")
     private String mapLink;
 
     @Column(nullable = false)
     private boolean includeDefaultHomeSections = true;
 
-    @Column(length = 500)
+    @Column(name = "default_home_section_types", columnDefinition = "TEXT")
     private String defaultHomeSectionTypes = "TODAYS_DEALS,FEATURED_PRODUCTS,BEST_SELLERS,NEW_ARRIVALS,LOW_PRICE_DEALS";
 
     private String notificationEmailFrom;
@@ -119,19 +119,19 @@ public class SiteSettings extends BaseEntity {
 
     private String whatsappNumber;
 
-    @Column(length = 500)
+    @Column(name = "facebook_url", columnDefinition = "TEXT")
     private String facebookUrl;
 
-    @Column(length = 500)
+    @Column(name = "instagram_url", columnDefinition = "TEXT")
     private String instagramUrl;
 
-    @Column(length = 500)
+    @Column(name = "x_url", columnDefinition = "TEXT")
     private String xUrl;
 
-    @Column(length = 500)
+    @Column(name = "linkedin_url", columnDefinition = "TEXT")
     private String linkedinUrl;
 
-    @Column(length = 500)
+    @Column(name = "youtube_url", columnDefinition = "TEXT")
     private String youtubeUrl;
 
     @Column(name = "homepage_builder_json", columnDefinition = "LONGTEXT")
@@ -146,6 +146,6 @@ public class SiteSettings extends BaseEntity {
     @Column(nullable = false)
     private boolean returnNotificationsEnabled = true;
 
-    @Column(length = 1000)
+    @Column(name = "security_notice", columnDefinition = "TEXT")
     private String securityNotice;
 }

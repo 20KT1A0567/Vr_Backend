@@ -56,6 +56,10 @@ public class AdminActivityLogService {
         return repository.findByAdminId(adminId, pageable);
     }
 
+    public Page<AdminActivityLog> forEntity(String entityType, Long entityId, Pageable pageable) {
+        return repository.findByEntity(entityType, entityId, pageable);
+    }
+
     private HttpServletRequest currentRequest() {
         try {
             ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();

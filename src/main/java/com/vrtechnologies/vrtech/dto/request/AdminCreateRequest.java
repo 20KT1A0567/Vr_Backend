@@ -41,5 +41,9 @@ public class AdminCreateRequest {
     private LocalTime allowedLoginStartTime;
     private LocalTime allowedLoginEndTime;
 
+    private List<String> allowedLoginDays;
+
+    private Boolean twoFactorEnabled;
+
     private List<Long> storeIds;
 }

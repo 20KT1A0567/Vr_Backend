@@ -1,13 +1,22 @@
 package com.vrtechnologies.vrtech.controller;
 
+import com.vrtechnologies.vrtech.dto.request.FirebaseLoginRequest;
 import com.vrtechnologies.vrtech.dto.request.LoginRequest;
 import com.vrtechnologies.vrtech.dto.request.LogoutRequest;
+import com.vrtechnologies.vrtech.dto.request.PhoneSendRequest;
 import com.vrtechnologies.vrtech.dto.request.PhoneVerifyRequest;
 import com.vrtechnologies.vrtech.dto.request.RefreshTokenRequest;
 import com.vrtechnologies.vrtech.dto.request.RegisterRequest;
+import com.vrtechnologies.vrtech.dto.request.TwoFactorBackupRequest;
+import com.vrtechnologies.vrtech.dto.request.TwoFactorResendRequest;
+import com.vrtechnologies.vrtech.dto.request.TwoFactorVerifyRequest;
 import com.vrtechnologies.vrtech.dto.response.ApiResponse;
 import com.vrtechnologies.vrtech.dto.response.AuthResponse;
+import com.vrtechnologies.vrtech.dto.response.LoginOutcome;
+import com.vrtechnologies.vrtech.dto.response.PhoneSendResponse;
+import com.vrtechnologies.vrtech.dto.response.TwoFactorChallengeResponse;
 import com.vrtechnologies.vrtech.service.AuthService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -31,13 +40,43 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public ApiResponse<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
-        return ApiResponse.ok("Login successful", authService.login(request));
+    public ApiResponse<Object> login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
+        LoginOutcome outcome = authService.login(request, clientIp(http), userAgent(http));
+        if (outcome.isTwoFactorRequired()) {
+            TwoFactorChallengeResponse challenge = outcome.getTwoFactorChallenge();
+            return ApiResponse.ok("Two-factor verification required", challenge);
+        }
+        return ApiResponse.ok("Login successful", outcome.getAuthResponse());
+    }
+
+    @PostMapping("/2fa/verify")
+    public ApiResponse<AuthResponse> verifyTwoFactor(@Valid @RequestBody TwoFactorVerifyRequest request) {
+        return ApiResponse.ok("Login successful", authService.verifyTwoFactor(request));
+    }
+
+    @PostMapping("/2fa/resend")
+    public ApiResponse<TwoFactorChallengeResponse> resendTwoFactor(@Valid @RequestBody TwoFactorResendRequest request) {
+        return ApiResponse.ok("Verification code resent", authService.resendTwoFactor(request));
+    }
+
+    @PostMapping("/2fa/backup")
+    public ApiResponse<AuthResponse> verifyBackupCode(@Valid @RequestBody TwoFactorBackupRequest request, HttpServletRequest http) {
+        return ApiResponse.ok("Login successful", authService.verifyBackupCode(request, clientIp(http)));
+    }
+
+    @PostMapping("/phone/send")
+    public ApiResponse<PhoneSendResponse> sendPhoneOtp(@Valid @RequestBody PhoneSendRequest request) {
+        return ApiResponse.ok("OTP sent", authService.sendPhoneOtp(request));
     }
 
     @PostMapping("/phone/verify")
     public ApiResponse<AuthResponse> verifyPhone(@Valid @RequestBody PhoneVerifyRequest request) {
         return ApiResponse.ok("Login successful", authService.verifyPhone(request));
+    }
+
+    @PostMapping("/customer/firebase-login")
+    public ApiResponse<AuthResponse> firebaseCustomerLogin(@Valid @RequestBody FirebaseLoginRequest request) {
+        return ApiResponse.ok("Login successful", authService.firebaseCustomerLogin(request.getFirebaseIdToken()));
     }
 
     @PostMapping("/refresh")
@@ -54,5 +93,20 @@ public class AuthController {
     @GetMapping("/me")
     public ApiResponse<AuthResponse> me() {
         return ApiResponse.ok("Current user", authService.me());
+    }
+
+    private String clientIp(HttpServletRequest http) {
+        if (http == null) return null;
+        String forwarded = http.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return http.getRemoteAddr();
+    }
+
+    private String userAgent(HttpServletRequest http) {
+        if (http == null) return null;
+        String value = http.getHeader("User-Agent");
+        return value == null ? null : value.length() > 250 ? value.substring(0, 250) : value;
     }
 }

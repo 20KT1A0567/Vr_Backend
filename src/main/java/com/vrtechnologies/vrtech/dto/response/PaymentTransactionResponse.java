@@ -22,6 +22,10 @@ public class PaymentTransactionResponse {
     private String gatewayPaymentId;
     private String gatewayStatus;
     private String failureReason;
+    private String refundId;
+    private BigDecimal refundedAmount;
+    private String refundReason;
+    private String refundStatus;
     private LocalDateTime verifiedAt;
     private LocalDateTime paidAt;
     private LocalDateTime refundedAt;

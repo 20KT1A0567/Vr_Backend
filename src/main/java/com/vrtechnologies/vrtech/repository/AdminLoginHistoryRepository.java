@@ -5,6 +5,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.LocalDateTime;
+
 public interface AdminLoginHistoryRepository extends JpaRepository<AdminLoginHistory, Long> {
 
     Page<AdminLoginHistory> findByAdminId(Long adminId, Pageable pageable);
@@ -12,4 +14,6 @@ public interface AdminLoginHistoryRepository extends JpaRepository<AdminLoginHis
     Page<AdminLoginHistory> findAllByOrderByLoginAtDesc(Pageable pageable);
 
     AdminLoginHistory findFirstBySessionIdOrderByLoginAtDesc(Long sessionId);
+
+    long countByStatusAndLoginAtAfter(String status, LocalDateTime loginAt);
 }

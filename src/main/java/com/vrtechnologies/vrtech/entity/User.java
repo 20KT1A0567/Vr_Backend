@@ -15,9 +15,13 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.EnumSet;
+import java.util.Locale;
+import java.util.Set;
 
 @Getter
 @Setter
@@ -54,6 +58,18 @@ public class User extends BaseEntity {
     @Column(name = "profile_image_url")
     private String profileImageUrl;
 
+    @Column(name = "preferred_contact_name")
+    private String preferredContactName;
+
+    @Column(name = "preferred_contact_phone")
+    private String preferredContactPhone;
+
+    @Column(name = "preferred_contact_email")
+    private String preferredContactEmail;
+
+    @Column(name = "preferred_delivery_address", columnDefinition = "TEXT")
+    private String preferredDeliveryAddress;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "admin_status")
     private AdminStatus adminStatus;
@@ -70,8 +86,20 @@ public class User extends BaseEntity {
     @Column(name = "allowed_login_end_time")
     private LocalTime allowedLoginEndTime;
 
+    @Column(name = "allowed_login_days", length = 32)
+    private String allowedLoginDays;
+
+    @Column(name = "two_factor_enabled", nullable = false)
+    private boolean twoFactorEnabled = false;
+
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
+
+    @Column(name = "failed_login_attempts", nullable = false)
+    private int failedLoginAttempts = 0;
+
+    @Column(name = "locked_until")
+    private LocalDateTime lockedUntil;
 
     @Column(name = "created_by")
     private Long createdBy;
@@ -97,5 +125,40 @@ public class User extends BaseEntity {
             return adminStatus;
         }
         return active ? AdminStatus.ACTIVE : AdminStatus.DISABLED;
+    }
+
+    @JsonIgnore
+    public EnumSet<DayOfWeek> allowedLoginDaysSet() {
+        EnumSet<DayOfWeek> result = EnumSet.noneOf(DayOfWeek.class);
+        if (allowedLoginDays == null || allowedLoginDays.isBlank()) {
+            return result;
+        }
+        for (String token : allowedLoginDays.split(",")) {
+            String trimmed = token.trim().toUpperCase(Locale.ROOT);
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            try {
+                result.add(DayOfWeek.valueOf(trimmed));
+            } catch (IllegalArgumentException ignored) {
+                // Tolerate legacy / malformed values
+            }
+        }
+        return result;
+    }
+
+    public void setAllowedLoginDaysFromSet(Set<DayOfWeek> days) {
+        if (days == null || days.isEmpty()) {
+            this.allowedLoginDays = null;
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (DayOfWeek day : days) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(day.name());
+        }
+        this.allowedLoginDays = sb.toString();
     }
 }

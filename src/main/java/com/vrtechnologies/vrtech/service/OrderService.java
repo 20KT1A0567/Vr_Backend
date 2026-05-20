@@ -4,17 +4,27 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vrtechnologies.vrtech.dto.request.OrderRequest;
 import com.vrtechnologies.vrtech.dto.request.PaymentVerificationRequest;
+import com.vrtechnologies.vrtech.dto.request.ShipmentUpdateRequest;
+import com.vrtechnologies.vrtech.dto.request.CourierWebhookRequest;
+import com.vrtechnologies.vrtech.dto.response.CheckoutProfileResponse;
 import com.vrtechnologies.vrtech.dto.response.OrderItemResponse;
 import com.vrtechnologies.vrtech.dto.response.OrderResponse;
 import com.vrtechnologies.vrtech.dto.response.OrderTimelineEventResponse;
 import com.vrtechnologies.vrtech.dto.response.PaymentCheckoutSessionResponse;
+import com.vrtechnologies.vrtech.dto.response.PaymentRecoveryResponse;
 import com.vrtechnologies.vrtech.dto.response.PaymentTransactionResponse;
+import com.vrtechnologies.vrtech.dto.response.PaymentWebhookEventResponse;
+import com.vrtechnologies.vrtech.dto.response.RefundTransactionResponse;
+import com.vrtechnologies.vrtech.dto.response.CouponValidationResponse;
 import com.vrtechnologies.vrtech.entity.CartItem;
 import com.vrtechnologies.vrtech.entity.CustomerOrder;
 import com.vrtechnologies.vrtech.entity.OrderItem;
 import com.vrtechnologies.vrtech.entity.OrderTimelineEvent;
 import com.vrtechnologies.vrtech.entity.PaymentTransaction;
+import com.vrtechnologies.vrtech.entity.PaymentWebhookEvent;
 import com.vrtechnologies.vrtech.entity.Product;
+import com.vrtechnologies.vrtech.entity.RefundTransaction;
+import com.vrtechnologies.vrtech.entity.SiteSettings;
 import com.vrtechnologies.vrtech.entity.Store;
 import com.vrtechnologies.vrtech.entity.User;
 import com.vrtechnologies.vrtech.entity.enums.OrderStatus;
@@ -29,16 +39,25 @@ import com.vrtechnologies.vrtech.exception.ResourceNotFoundException;
 import com.vrtechnologies.vrtech.repository.CartItemRepository;
 import com.vrtechnologies.vrtech.repository.CustomerOrderRepository;
 import com.vrtechnologies.vrtech.repository.PaymentTransactionRepository;
+import com.vrtechnologies.vrtech.repository.PaymentWebhookEventRepository;
+import com.vrtechnologies.vrtech.repository.ProductRepository;
+import com.vrtechnologies.vrtech.repository.ProductStoreStockRepository;
+import com.vrtechnologies.vrtech.repository.RefundTransactionRepository;
+import com.vrtechnologies.vrtech.repository.SiteSettingsRepository;
 import com.vrtechnologies.vrtech.repository.StoreRepository;
+import com.vrtechnologies.vrtech.repository.UserAddressRepository;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -55,9 +74,17 @@ public class OrderService {
     private final ProductService productService;
     private final PermissionService permissionService;
     private final PaymentTransactionRepository paymentTransactionRepository;
+    private final PaymentWebhookEventRepository paymentWebhookEventRepository;
+    private final RefundTransactionRepository refundTransactionRepository;
+    private final ProductRepository productRepository;
+    private final ProductStoreStockRepository productStoreStockRepository;
     private final OrderTimelineService orderTimelineService;
     private final RazorpayService razorpayService;
     private final AdminActivityLogService adminActivityLogService;
+    private final CouponService couponService;
+    private final NotificationService notificationService;
+    private final UserAddressRepository userAddressRepository;
+    private final SiteSettingsRepository siteSettingsRepository;
     private final ObjectMapper objectMapper;
 
     public OrderService(
@@ -68,9 +95,17 @@ public class OrderService {
             ProductService productService,
             PermissionService permissionService,
             PaymentTransactionRepository paymentTransactionRepository,
+            PaymentWebhookEventRepository paymentWebhookEventRepository,
+            RefundTransactionRepository refundTransactionRepository,
+            ProductRepository productRepository,
+            ProductStoreStockRepository productStoreStockRepository,
             OrderTimelineService orderTimelineService,
             RazorpayService razorpayService,
             AdminActivityLogService adminActivityLogService,
+            CouponService couponService,
+            NotificationService notificationService,
+            UserAddressRepository userAddressRepository,
+            SiteSettingsRepository siteSettingsRepository,
             ObjectMapper objectMapper
     ) {
         this.customerOrderRepository = customerOrderRepository;
@@ -80,9 +115,17 @@ public class OrderService {
         this.productService = productService;
         this.permissionService = permissionService;
         this.paymentTransactionRepository = paymentTransactionRepository;
+        this.paymentWebhookEventRepository = paymentWebhookEventRepository;
+        this.refundTransactionRepository = refundTransactionRepository;
+        this.productRepository = productRepository;
+        this.productStoreStockRepository = productStoreStockRepository;
         this.orderTimelineService = orderTimelineService;
         this.razorpayService = razorpayService;
         this.adminActivityLogService = adminActivityLogService;
+        this.couponService = couponService;
+        this.notificationService = notificationService;
+        this.userAddressRepository = userAddressRepository;
+        this.siteSettingsRepository = siteSettingsRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -97,10 +140,25 @@ public class OrderService {
         if (request.getDeliveryType() == null) {
             throw new BadRequestException("Delivery type is required");
         }
+        SiteSettings settings = siteSettingsRepository.findTopByOrderByIdAsc().orElseGet(SiteSettings::new);
+        if (request.getDeliveryType().name().equals("PICKUP") && !settings.isPickupEnabled()) {
+            throw new BadRequestException("Store pickup is currently disabled");
+        }
+        if (request.getDeliveryType().name().equals("DELIVERY") && !settings.isDeliveryEnabled()) {
+            throw new BadRequestException("Delivery is currently disabled");
+        }
 
         if (request.getDeliveryType().name().equals("DELIVERY")
                 && (request.getDeliveryAddress() == null || request.getDeliveryAddress().isBlank())) {
             throw new BadRequestException("Delivery address is required for delivery orders");
+        }
+        if (request.getDeliveryType().name().equals("DELIVERY")
+                && (request.getDeliveryState() == null || request.getDeliveryState().isBlank())) {
+            throw new BadRequestException("Delivery state is required for delivery orders");
+        }
+
+        if (isOnlinePaymentMethod(request.getPaymentMethod()) && !razorpayService.isEnabled()) {
+            throw new BadRequestException("Razorpay payments are not configured yet");
         }
 
         Store store = storeRepository.findById(request.getStoreId())
@@ -118,12 +176,14 @@ public class OrderService {
         order.setContactPhone(trimToNull(request.getContactPhone()));
         order.setContactEmail(trimToNull(request.getContactEmail()));
         order.setDeliveryAddress(trimToNull(request.getDeliveryAddress()));
+        order.setDeliveryState(trimToNull(request.getDeliveryState()));
         order.setNotes(trimToNull(request.getNotes()));
+        updateUserCheckoutPreferences(user, request);
 
         BigDecimal total = BigDecimal.ZERO;
         for (CartItem cartItem : cartItems) {
             validateCartItemStore(cartItem, store);
-            reserveInventory(cartItem.getProduct(), cartItem.getQuantity());
+            reserveInventory(cartItem.getProduct(), store, cartItem.getQuantity());
 
             OrderItem item = new OrderItem();
             item.setOrder(order);
@@ -134,10 +194,25 @@ public class OrderService {
             total = total.add(cartItem.getProduct().getPrice().multiply(BigDecimal.valueOf(cartItem.getQuantity())));
         }
 
-        order.setTotalAmount(total);
+        BigDecimal discount = BigDecimal.ZERO;
+        String couponCode = trimToNull(request.getCouponCode());
+        if (couponCode != null) {
+            CouponValidationResponse validation = couponService.apply(couponCode, total);
+            discount = validation.getDiscountAmount();
+            order.setCouponCode(validation.getCode());
+        }
+        order.setSubtotalAmount(total);
+        order.setDiscountAmount(discount);
+        BigDecimal afterDiscount = total.subtract(discount).max(BigDecimal.ZERO);
+        BigDecimal deliveryCharge = calculateDeliveryCharge(settings, request, afterDiscount);
+        BigDecimal taxAmount = calculateTax(settings, afterDiscount);
+        order.setDeliveryCharge(deliveryCharge);
+        order.setTaxAmount(taxAmount);
+        order.setTotalAmount(afterDiscount.add(taxAmount).add(deliveryCharge).setScale(2, RoundingMode.HALF_UP));
         CustomerOrder saved = customerOrderRepository.save(order);
         ensureOrderIdentifiers(saved);
         cartItemRepository.deleteByUserId(user.getId());
+        notificationService.logOrderEvent("ORDER_PLACED", saved, "Order placed", "Your order " + saved.getOrderNumber() + " has been placed.");
 
         orderTimelineService.record(
                 saved,
@@ -149,7 +224,7 @@ public class OrderService {
                 metadata("paymentMethod", saved.getPaymentMethod().name(), "storeId", saved.getStore() != null ? saved.getStore().getId() : null)
         );
 
-        if (saved.getPaymentMethod() == null || saved.getPaymentMethod().name().equals("CASH")) {
+        if (!isOnlinePaymentMethod(saved.getPaymentMethod())) {
             orderTimelineService.record(
                     saved,
                     OrderTimelineEventType.PAYMENT_PENDING,
@@ -163,6 +238,77 @@ public class OrderService {
         return toResponse(saved);
     }
 
+    @Transactional
+    public OrderResponse placeGuestOrder(OrderRequest request) {
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            throw new BadRequestException("At least one item is required for guest checkout");
+        }
+        if (isOnlinePaymentMethod(request.getPaymentMethod()) && !razorpayService.isEnabled()) {
+            throw new BadRequestException("Razorpay payments are not configured yet");
+        }
+        SiteSettings settings = siteSettingsRepository.findTopByOrderByIdAsc().orElseGet(SiteSettings::new);
+        if (request.getDeliveryType() == null) {
+            throw new BadRequestException("Delivery type is required");
+        }
+        if (request.getDeliveryType().name().equals("DELIVERY")
+                && (request.getDeliveryAddress() == null || request.getDeliveryAddress().isBlank())) {
+            throw new BadRequestException("Delivery address is required for delivery orders");
+        }
+        Store store = storeRepository.findById(request.getStoreId())
+                .filter(Store::isActive)
+                .orElseThrow(() -> new ResourceNotFoundException("Store not found"));
+
+        CustomerOrder order = new CustomerOrder();
+        order.setGuestCheckout(true);
+        order.setStore(store);
+        order.setDeliveryType(request.getDeliveryType());
+        order.setPaymentMethod(request.getPaymentMethod());
+        order.setPaymentStatus(PaymentStatus.PENDING);
+        order.setStatus(OrderStatus.PENDING);
+        order.setContactName(trimToNull(request.getContactName()));
+        order.setContactPhone(trimToNull(request.getContactPhone()));
+        order.setContactEmail(trimToNull(request.getContactEmail()));
+        order.setDeliveryAddress(trimToNull(request.getDeliveryAddress()));
+        order.setDeliveryState(trimToNull(request.getDeliveryState()));
+        order.setNotes(trimToNull(request.getNotes()));
+
+        BigDecimal total = BigDecimal.ZERO;
+        for (var requestedItem : request.getItems()) {
+            Product product = productRepository.findById(requestedItem.getProductId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
+            validateProductStore(product, store);
+            reserveInventory(product, store, requestedItem.getQuantity());
+
+            OrderItem item = new OrderItem();
+            item.setOrder(order);
+            item.setProduct(product);
+            item.setQuantity(requestedItem.getQuantity());
+            item.setPriceAtTime(product.getPrice());
+            order.getItems().add(item);
+            total = total.add(product.getPrice().multiply(BigDecimal.valueOf(requestedItem.getQuantity())));
+        }
+
+        BigDecimal discount = BigDecimal.ZERO;
+        String couponCode = trimToNull(request.getCouponCode());
+        if (couponCode != null) {
+            CouponValidationResponse validation = couponService.apply(couponCode, total);
+            discount = validation.getDiscountAmount();
+            order.setCouponCode(validation.getCode());
+        }
+        order.setSubtotalAmount(total);
+        order.setDiscountAmount(discount);
+        BigDecimal afterDiscount = total.subtract(discount).max(BigDecimal.ZERO);
+        order.setDeliveryCharge(calculateDeliveryCharge(settings, request, afterDiscount));
+        order.setTaxAmount(calculateTax(settings, afterDiscount));
+        order.setTotalAmount(afterDiscount.add(order.getTaxAmount()).add(order.getDeliveryCharge()).setScale(2, RoundingMode.HALF_UP));
+
+        CustomerOrder saved = customerOrderRepository.save(order);
+        ensureOrderIdentifiers(saved);
+        notificationService.logOrderEvent("GUEST_ORDER_PLACED", saved, "Guest order placed", "Your order " + saved.getOrderNumber() + " has been placed.");
+        orderTimelineService.record(saved, OrderTimelineEventType.PLACED, "Guest order placed", "Guest checkout order was created.", null, "WEBSITE");
+        return toResponse(saved);
+    }
+
     public List<OrderResponse> getMyOrders() {
         User user = userContextService.getCurrentUser();
         return customerOrderRepository.findByUserIdOrderByCreatedAtDesc(user.getId()).stream()
@@ -170,17 +316,101 @@ public class OrderService {
                 .toList();
     }
 
+    public CheckoutProfileResponse getCheckoutProfile() {
+        User user = userContextService.getCurrentUser();
+        List<CustomerOrder> recentOrders = customerOrderRepository.findTop10ByUserIdOrderByCreatedAtDesc(user.getId());
+        List<CheckoutProfileResponse.SavedAddressResponse> savedAddresses = buildSavedAddresses(user, recentOrders);
+
+        return CheckoutProfileResponse.builder()
+                .contactName(defaultString(trimToNull(user.getPreferredContactName()), trimToNull(user.getName())))
+                .contactPhone(defaultString(trimToNull(user.getPreferredContactPhone()), trimToNull(user.getPhone())))
+                .contactEmail(defaultString(trimToNull(user.getPreferredContactEmail()), trimToNull(user.getEmail())))
+                .defaultDeliveryAddress(trimToNull(user.getPreferredDeliveryAddress()))
+                .savedAddresses(savedAddresses)
+                .build();
+    }
+
     public OrderResponse getMyOrder(Long id) {
         User user = userContextService.getCurrentUser();
         return toResponse(findOwnedOrder(user, id));
     }
 
+    public OrderResponse trackPublicOrder(String orderNumber, String phone) {
+        String normalizedOrderNumber = trimToNull(orderNumber);
+        String normalizedPhone = digitsOnly(phone);
+        if (normalizedOrderNumber == null || normalizedPhone == null || normalizedPhone.length() < 6) {
+            throw new BadRequestException("Enter a valid order number and phone number");
+        }
+
+        CustomerOrder order = customerOrderRepository.findByOrderNumberIgnoreCase(normalizedOrderNumber)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+        String orderPhone = digitsOnly(order.getContactPhone());
+        String phoneTail = normalizedPhone.substring(Math.max(0, normalizedPhone.length() - 10));
+        if (orderPhone == null || !orderPhone.endsWith(phoneTail)) {
+            throw new ResourceNotFoundException("Order not found for this phone number");
+        }
+
+        return toResponse(order);
+    }
+
     public List<OrderResponse> getAllOrders(User admin) {
+        return getAllOrders(admin, null, null);
+    }
+
+    public List<OrderResponse> getAllOrders(User admin, LocalDateTime startDate, LocalDateTime endDate) {
         List<Long> accessibleStoreIds = permissionService.accessibleStoreIds(admin);
         return customerOrderRepository.findAll().stream()
                 .filter(order -> canAccessOrder(accessibleStoreIds, order))
+                .filter(order -> withinDateRange(order.getCreatedAt(), startDate, endDate))
                 .map(this::toResponse)
                 .toList();
+    }
+
+    public List<OrderResponse> getFailedPaymentOrders(User admin) {
+        return getFailedPaymentOrders(admin, null, null);
+    }
+
+    public List<OrderResponse> getFailedPaymentOrders(User admin, LocalDateTime startDate, LocalDateTime endDate) {
+        List<Long> accessibleStoreIds = permissionService.accessibleStoreIds(admin);
+        return customerOrderRepository.findByPaymentStatusOrderByCreatedAtDesc(PaymentStatus.FAILED).stream()
+                .filter(order -> canAccessOrder(accessibleStoreIds, order))
+                .filter(order -> withinDateRange(order.getCreatedAt(), startDate, endDate))
+                .map(this::toResponse)
+                .toList();
+    }
+
+    @Transactional
+    public PaymentRecoveryResponse recoverFailedPayment(User admin, Long id) {
+        CustomerOrder order = customerOrderRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+        requireOrderAccess(admin, order);
+        if (order.getPaymentStatus() != PaymentStatus.FAILED && order.getPaymentStatus() != PaymentStatus.PENDING) {
+            throw new BadRequestException("Only failed or pending online payments can be recovered");
+        }
+        if (order.getPaymentMethod() == null || "CASH".equals(order.getPaymentMethod().name())) {
+            throw new BadRequestException("Cash orders do not need payment recovery");
+        }
+        String subject = "Retry payment for order " + safeOrderLabel(order);
+        String message = "Payment recovery reminder queued for " + safeOrderLabel(order)
+                + ". Customer can open their order and use Retry Payment.";
+        var emailLog = notificationService.log("PAYMENT_RECOVERY", "EMAIL", order.getContactEmail(), subject, message, order.getId());
+        var whatsappLog = notificationService.log("PAYMENT_RECOVERY", "WHATSAPP", order.getContactPhone(), subject, message, order.getId());
+        orderTimelineService.record(
+                order,
+                OrderTimelineEventType.PAYMENT_FAILED,
+                "Payment recovery queued",
+                "Admin queued a payment retry reminder.",
+                admin,
+                "ADMIN",
+                metadata("emailStatus", emailLog != null ? emailLog.getStatus() : "SKIPPED", "whatsappStatus", whatsappLog != null ? whatsappLog.getStatus() : "SKIPPED")
+        );
+        return PaymentRecoveryResponse.builder()
+                .orderId(order.getId())
+                .orderNumber(order.getOrderNumber())
+                .emailStatus(emailLog != null ? emailLog.getStatus() : "SKIPPED")
+                .whatsappStatus(whatsappLog != null ? whatsappLog.getStatus() : "SKIPPED")
+                .message("Payment recovery queued for " + safeOrderLabel(order))
+                .build();
     }
 
     public OrderResponse getAdminOrder(User admin, Long id) {
@@ -196,7 +426,7 @@ public class OrderService {
         CustomerOrder order = findOwnedOrder(user, orderId);
         ensureOrderIdentifiers(order);
 
-        if (order.getPaymentMethod() == null || order.getPaymentMethod().name().equals("CASH")) {
+        if (!isOnlinePaymentMethod(order.getPaymentMethod())) {
             throw new BadRequestException("Cash orders do not require an online payment session");
         }
         if (order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.REFUNDED) {
@@ -276,6 +506,7 @@ public class OrderService {
         if (order.getPaidAt() == null) {
             order.setPaidAt(LocalDateTime.now());
         }
+        boolean orderConfirmed = promoteToConfirmedIfPending(order);
         customerOrderRepository.save(order);
 
         orderTimelineService.record(
@@ -287,6 +518,17 @@ public class OrderService {
                 "WEBSITE",
                 metadata("transactionId", transaction.getId(), "gatewayPaymentId", request.getRazorpayPaymentId())
         );
+        if (orderConfirmed) {
+            orderTimelineService.record(
+                    order,
+                    OrderTimelineEventType.CONFIRMED,
+                    "Order confirmed",
+                    "Payment verification completed and the order is now confirmed.",
+                    user,
+                    "WEBSITE"
+            );
+        }
+        notificationService.logOrderEvent("PAYMENT_SUCCESS", order, "Payment successful", "Payment for " + order.getOrderNumber() + " has been verified.");
 
         return toResponse(order);
     }
@@ -343,7 +585,7 @@ public class OrderService {
         } else {
             if (previousStatus == OrderStatus.CANCELLED && status != OrderStatus.CANCELLED) {
                 for (OrderItem item : order.getItems()) {
-                    reserveInventory(item.getProduct(), item.getQuantity());
+                    reserveInventory(item.getProduct(), order.getStore(), item.getQuantity());
                 }
                 order.setCancelledAt(null);
                 order.setCancellationReason(null);
@@ -398,6 +640,7 @@ public class OrderService {
         order.setPaymentStatus(paymentStatus);
         if (paymentStatus == PaymentStatus.PAID && order.getPaidAt() == null) {
             order.setPaidAt(LocalDateTime.now());
+            promoteToConfirmedIfPending(order);
             createManualPaymentTransaction(order, admin, PaymentTransactionStatus.CAPTURED, "Marked paid from admin panel");
             orderTimelineService.record(
                     order,
@@ -446,6 +689,99 @@ public class OrderService {
         return toResponse(order);
     }
 
+    @Transactional
+    public OrderResponse updateShipment(User admin, Long id, ShipmentUpdateRequest request) {
+        CustomerOrder order = customerOrderRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+        requireOrderAccess(admin, order);
+
+        String beforeSummary = shipmentSummary(order);
+        OrderStatus previousStatus = order.getStatus();
+
+        boolean clear = Boolean.TRUE.equals(request.getClear());
+        if (clear) {
+            order.setCourierName(null);
+            order.setTrackingNumber(null);
+            order.setTrackingUrl(null);
+            order.setShippedAt(null);
+        } else {
+            if (request.getCourierName() != null) {
+                order.setCourierName(blankToNull(request.getCourierName()));
+            }
+            if (request.getTrackingNumber() != null) {
+                order.setTrackingNumber(blankToNull(request.getTrackingNumber()));
+            }
+            if (request.getTrackingUrl() != null) {
+                order.setTrackingUrl(blankToNull(request.getTrackingUrl()));
+            }
+        }
+
+        boolean shouldBumpToShipped = !clear
+                && Boolean.TRUE.equals(request.getMarkShipped())
+                && previousStatus != OrderStatus.SHIPPED
+                && previousStatus != OrderStatus.DELIVERED
+                && previousStatus != OrderStatus.CANCELLED
+                && previousStatus != OrderStatus.REFUNDED;
+
+        if (shouldBumpToShipped) {
+            order.setStatus(OrderStatus.SHIPPED);
+            if (order.getShippedAt() == null) {
+                order.setShippedAt(LocalDateTime.now());
+            }
+        } else if (!clear && order.getShippedAt() == null
+                && (order.getCourierName() != null || order.getTrackingNumber() != null)) {
+            // Capture first-shipment timestamp the moment any tracking info is added.
+            order.setShippedAt(LocalDateTime.now());
+        }
+
+        customerOrderRepository.save(order);
+
+        String afterSummary = shipmentSummary(order);
+
+        if (shouldBumpToShipped) {
+            orderTimelineService.record(
+                    order,
+                    OrderTimelineEventType.SHIPPED,
+                    "Order shipped",
+                    "Admin marked the order as shipped"
+                            + (order.getCourierName() != null ? " via " + order.getCourierName() : "")
+                            + (order.getTrackingNumber() != null ? " (AWB " + order.getTrackingNumber() + ")" : "")
+                            + ".",
+                    admin,
+                    "ADMIN"
+            );
+        }
+        // Non-shipping shipment edits are tracked via the admin activity log only,
+        // to avoid noisy timeline entries for minor tracking-URL fixes.
+
+        adminActivityLogService.log(
+                admin,
+                Module.ORDERS,
+                PermissionAction.UPDATE,
+                "ORDER_SHIPMENT",
+                order.getId(),
+                beforeSummary,
+                afterSummary,
+                "Updated shipment for " + safeOrderLabel(order)
+        );
+
+        return toResponse(order);
+    }
+
+    private String shipmentSummary(CustomerOrder order) {
+        return "courier=" + (order.getCourierName() == null ? "" : order.getCourierName())
+                + ";awb=" + (order.getTrackingNumber() == null ? "" : order.getTrackingNumber())
+                + ";url=" + (order.getTrackingUrl() == null ? "" : order.getTrackingUrl())
+                + ";shippedAt=" + (order.getShippedAt() == null ? "" : order.getShippedAt())
+                + ";status=" + order.getStatus();
+    }
+
+    private String blankToNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     public String generateInvoiceHtmlForUser(Long orderId) {
         User user = userContextService.getCurrentUser();
         return generateInvoiceHtml(findOwnedOrder(user, orderId));
@@ -458,9 +794,59 @@ public class OrderService {
         return generateInvoiceHtml(order);
     }
 
+    public byte[] generateInvoicePdfForUser(Long orderId) {
+        User user = userContextService.getCurrentUser();
+        return generateSimplePdf(findOwnedOrder(user, orderId));
+    }
+
+    public byte[] generateInvoicePdfForAdmin(User admin, Long orderId) {
+        CustomerOrder order = customerOrderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+        requireOrderAccess(admin, order);
+        return generateSimplePdf(order);
+    }
+
+    public List<PaymentWebhookEventResponse> getPaymentWebhookEvents(User admin) {
+        permissionService.requirePermission(admin, Module.ORDERS, PermissionAction.VIEW);
+        return paymentWebhookEventRepository.findTop200ByOrderByCreatedAtDescIdDesc().stream()
+                .map(event -> PaymentWebhookEventResponse.builder()
+                        .id(event.getId())
+                        .gatewayEventId(event.getGatewayEventId())
+                        .gateway(event.getGateway())
+                        .eventType(event.getEventType())
+                        .status(event.getStatus())
+                        .gatewayOrderId(event.getGatewayOrderId())
+                        .gatewayPaymentId(event.getGatewayPaymentId())
+                        .errorMessage(event.getErrorMessage())
+                        .processedAt(event.getProcessedAt())
+                        .createdAt(event.getCreatedAt())
+                        .build())
+                .toList();
+    }
+
+    public List<RefundTransactionResponse> getRefundTransactions(User admin, Long orderId) {
+        permissionService.requirePermission(admin, Module.ORDERS, PermissionAction.VIEW);
+        return refundTransactionRepository.findByOrderIdOrderByCreatedAtDescIdDesc(orderId).stream()
+                .map(refund -> RefundTransactionResponse.builder()
+                        .id(refund.getId())
+                        .orderId(refund.getOrder().getId())
+                        .paymentTransactionId(refund.getPaymentTransaction() != null ? refund.getPaymentTransaction().getId() : null)
+                        .refundId(refund.getRefundId())
+                        .amount(refund.getAmount())
+                        .status(refund.getStatus())
+                        .reason(refund.getReason())
+                        .refundedAt(refund.getRefundedAt())
+                        .createdAt(refund.getCreatedAt())
+                        .build())
+                .toList();
+    }
+
     @Transactional
     public void handleRazorpayWebhook(String payload, String signature, String eventId, String userAgent) {
         razorpayService.verifyWebhookSignature(payload, signature);
+        if (eventId != null && paymentWebhookEventRepository.findByGatewayEventId(eventId).isPresent()) {
+            return;
+        }
 
         Map<String, Object> envelope;
         try {
@@ -476,8 +862,19 @@ public class OrderService {
 
         String gatewayPaymentId = stringValue(paymentEntity.get("id"), null);
         String gatewayOrderId = stringValue(paymentEntity.get("order_id"), stringValue(orderEntity.get("id"), null));
+        PaymentWebhookEvent webhookEvent = new PaymentWebhookEvent();
+        webhookEvent.setGatewayEventId(eventId);
+        webhookEvent.setEventType(event);
+        webhookEvent.setGatewayPaymentId(gatewayPaymentId);
+        webhookEvent.setGatewayOrderId(gatewayOrderId);
+        webhookEvent.setUserAgent(userAgent);
+        webhookEvent.setPayload(payload);
 
         if (gatewayPaymentId == null && gatewayOrderId == null) {
+            webhookEvent.setStatus("IGNORED");
+            webhookEvent.setErrorMessage("Missing gateway payment/order id");
+            webhookEvent.setProcessedAt(LocalDateTime.now());
+            paymentWebhookEventRepository.save(webhookEvent);
             return;
         }
 
@@ -488,8 +885,15 @@ public class OrderService {
             transaction = paymentTransactionRepository.findFirstByGatewayOrderIdOrderByCreatedAtDescIdDesc(gatewayOrderId).orElse(null);
         }
         if (transaction == null) {
+            webhookEvent.setStatus("UNMATCHED");
+            webhookEvent.setErrorMessage("No matching payment transaction");
+            webhookEvent.setProcessedAt(LocalDateTime.now());
+            paymentWebhookEventRepository.save(webhookEvent);
             return;
         }
+        webhookEvent.setStatus("PROCESSED");
+        webhookEvent.setProcessedAt(LocalDateTime.now());
+        paymentWebhookEventRepository.save(webhookEvent);
 
         CustomerOrder order = transaction.getOrder();
         transaction.setGatewayEventId(eventId);
@@ -527,7 +931,9 @@ public class OrderService {
             if (order.getPaidAt() == null) {
                 order.setPaidAt(LocalDateTime.now());
             }
+            boolean orderConfirmed = promoteToConfirmedIfPending(order);
             customerOrderRepository.save(order);
+            notificationService.logOrderEvent("PAYMENT_SUCCESS", order, "Payment captured", "Payment for " + order.getOrderNumber() + " was captured.");
 
             orderTimelineService.record(
                     order,
@@ -538,6 +944,16 @@ public class OrderService {
                     "WEBHOOK",
                     metadata("gatewayPaymentId", gatewayPaymentId)
             );
+            if (orderConfirmed) {
+                orderTimelineService.record(
+                        order,
+                        OrderTimelineEventType.CONFIRMED,
+                        "Order confirmed",
+                        "Payment verification completed and the order is now confirmed.",
+                        null,
+                        "WEBHOOK"
+                );
+            }
             return;
         }
 
@@ -548,6 +964,7 @@ public class OrderService {
 
             order.setPaymentStatus(PaymentStatus.FAILED);
             customerOrderRepository.save(order);
+            notificationService.logOrderEvent("PAYMENT_FAILED", order, "Payment failed", "Payment failed for " + order.getOrderNumber() + ".");
 
             orderTimelineService.record(
                     order,
@@ -562,9 +979,17 @@ public class OrderService {
         }
 
         if ("refund.processed".equals(event) || "payment.refunded".equals(event)) {
+            Map<String, Object> refundEntity = nestedEntity(payloadMap, "refund");
+            String refundId = stringValue(refundEntity.get("id"), null);
+            BigDecimal refundedAmount = paiseToRupees(refundEntity.get("amount"));
             transaction.setStatus(PaymentTransactionStatus.REFUNDED);
             transaction.setRefundedAt(LocalDateTime.now());
+            transaction.setRefundId(refundId);
+            transaction.setRefundedAmount(refundedAmount);
+            transaction.setRefundStatus(stringValue(refundEntity.get("status"), "processed"));
+            transaction.setRefundReason(stringValue(refundEntity.get("notes"), "Razorpay refund webhook"));
             paymentTransactionRepository.save(transaction);
+            recordRefund(order, transaction, refundId, refundedAmount, transaction.getRefundStatus(), transaction.getRefundReason());
 
             order.setPaymentStatus(PaymentStatus.REFUNDED);
             if (order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.RETURN_REQUESTED) {
@@ -584,6 +1009,41 @@ public class OrderService {
         }
     }
 
+    @Transactional
+    public OrderResponse handleCourierWebhook(CourierWebhookRequest request) {
+        CustomerOrder order = request.getOrderNumber() != null && !request.getOrderNumber().isBlank()
+                ? customerOrderRepository.findByOrderNumberIgnoreCase(request.getOrderNumber()).orElse(null)
+                : null;
+        if (order == null && request.getTrackingNumber() != null) {
+            order = customerOrderRepository.findAll().stream()
+                    .filter(item -> request.getTrackingNumber().equalsIgnoreCase(item.getTrackingNumber()))
+                    .findFirst()
+                    .orElseThrow(() -> new ResourceNotFoundException("Order not found for courier webhook"));
+        }
+        if (order == null) {
+            throw new ResourceNotFoundException("Order not found for courier webhook");
+        }
+        if (request.getCourierName() != null) {
+            order.setCourierName(trimToNull(request.getCourierName()));
+        }
+        if (request.getTrackingNumber() != null) {
+            order.setTrackingNumber(trimToNull(request.getTrackingNumber()));
+        }
+        String normalized = request.getStatus() == null ? "" : request.getStatus().trim().toUpperCase(Locale.ROOT);
+        if (normalized.contains("DELIVER")) {
+            order.setStatus(OrderStatus.DELIVERED);
+            order.setDeliveredAt(LocalDateTime.now());
+        } else if (normalized.contains("SHIP") || normalized.contains("TRANSIT")) {
+            order.setStatus(OrderStatus.SHIPPED);
+            if (order.getShippedAt() == null) {
+                order.setShippedAt(LocalDateTime.now());
+            }
+        }
+        CustomerOrder saved = customerOrderRepository.save(order);
+        orderTimelineService.record(saved, timelineTypeForStatus(saved.getStatus()), "Courier status updated", "Courier reported: " + normalized, null, "COURIER");
+        return toResponse(saved);
+    }
+
     private OrderResponse toResponse(CustomerOrder order) {
         ensureOrderIdentifiers(order);
         List<OrderTimelineEventResponse> timeline = orderTimelineService.findForOrder(order.getId()).stream()
@@ -597,6 +1057,11 @@ public class OrderService {
                 .id(order.getId())
                 .orderNumber(order.getOrderNumber())
                 .invoiceNumber(order.getInvoiceNumber())
+                .subtotalAmount(order.getSubtotalAmount())
+                .discountAmount(order.getDiscountAmount())
+                .taxAmount(order.getTaxAmount())
+                .deliveryCharge(order.getDeliveryCharge())
+                .couponCode(order.getCouponCode())
                 .totalAmount(order.getTotalAmount())
                 .status(order.getStatus())
                 .deliveryType(order.getDeliveryType())
@@ -607,13 +1072,19 @@ public class OrderService {
                 .contactPhone(order.getContactPhone())
                 .contactEmail(order.getContactEmail())
                 .deliveryAddress(order.getDeliveryAddress())
+                .deliveryState(order.getDeliveryState())
                 .notes(order.getNotes())
                 .cancellationReason(order.getCancellationReason())
                 .returnReason(order.getReturnReason())
+                .returnResolutionNote(order.getReturnResolutionNote())
                 .paidAt(order.getPaidAt())
                 .deliveredAt(order.getDeliveredAt())
                 .cancelledAt(order.getCancelledAt())
                 .returnRequestedAt(order.getReturnRequestedAt())
+                .shippedAt(order.getShippedAt())
+                .courierName(order.getCourierName())
+                .trackingNumber(order.getTrackingNumber())
+                .trackingUrl(order.getTrackingUrl())
                 .latestPayment(latestPayment)
                 .timeline(timeline)
                 .items(order.getItems().stream().map(item -> OrderItemResponse.builder()
@@ -639,6 +1110,10 @@ public class OrderService {
                 .gatewayPaymentId(transaction.getGatewayPaymentId())
                 .gatewayStatus(transaction.getGatewayStatus())
                 .failureReason(transaction.getFailureReason())
+                .refundId(transaction.getRefundId())
+                .refundedAmount(transaction.getRefundedAmount())
+                .refundReason(transaction.getRefundReason())
+                .refundStatus(transaction.getRefundStatus())
                 .verifiedAt(transaction.getVerifiedAt())
                 .paidAt(transaction.getPaidAt())
                 .refundedAt(transaction.getRefundedAt())
@@ -661,25 +1136,41 @@ public class OrderService {
     }
 
     private void validateCartItemStore(CartItem cartItem, Store store) {
-        boolean availableInStore = cartItem.getProduct().getStores().stream()
+        validateProductStore(cartItem.getProduct(), store);
+    }
+
+    private void validateProductStore(Product product, Store store) {
+        boolean availableInStore = product.getStores().stream()
                 .anyMatch(mappedStore -> mappedStore.getId().equals(store.getId()) && mappedStore.isActive());
         if (!availableInStore) {
-            throw new BadRequestException(cartItem.getProduct().getTitle() + " is not mapped to the selected store");
+            throw new BadRequestException(product.getTitle() + " is not mapped to the selected store");
         }
     }
 
-    private void reserveInventory(Product product, int quantity) {
-        int currentStock = product.getStockQuantity() == null ? 0 : product.getStockQuantity();
-        if (!product.isAvailable() || currentStock < quantity) {
+    private void reserveInventory(Product product, Store store, int quantity) {
+        var storeStock = store == null ? java.util.Optional.<com.vrtechnologies.vrtech.entity.ProductStoreStock>empty() : productStoreStockRepository.findByProductIdAndStoreId(product.getId(), store.getId());
+        int currentStoreStock = storeStock.map(row -> row.getStockQuantity() == null ? 0 : row.getStockQuantity()).orElse(product.getStockQuantity() == null ? 0 : product.getStockQuantity());
+        if (!product.isAvailable() || currentStoreStock < quantity) {
             throw new BadRequestException(product.getTitle() + " does not have enough stock");
         }
+        storeStock.ifPresent(row -> {
+            row.setStockQuantity(currentStoreStock - quantity);
+            productStoreStockRepository.save(row);
+        });
+        int currentStock = product.getStockQuantity() == null ? 0 : product.getStockQuantity();
         product.setStockQuantity(currentStock - quantity);
         if (product.getStockQuantity() <= 0) {
             product.setAvailable(false);
         }
     }
 
-    private void releaseInventory(Product product, int quantity) {
+    private void releaseInventory(Product product, Store store, int quantity) {
+        if (store != null) {
+            productStoreStockRepository.findByProductIdAndStoreId(product.getId(), store.getId()).ifPresent(row -> {
+                row.setStockQuantity((row.getStockQuantity() == null ? 0 : row.getStockQuantity()) + quantity);
+                productStoreStockRepository.save(row);
+            });
+        }
         int currentStock = product.getStockQuantity() == null ? 0 : product.getStockQuantity();
         product.setStockQuantity(currentStock + quantity);
         if (product.getStockQuantity() > 0) {
@@ -714,12 +1205,33 @@ public class OrderService {
             changed = true;
         }
         if (order.getInvoiceNumber() == null || order.getInvoiceNumber().isBlank()) {
-            order.setInvoiceNumber(String.format("VRT-INV-%06d", order.getId()));
+            order.setInvoiceNumber(allocateInvoiceNumber(order.getId()));
             changed = true;
         }
         if (changed) {
             customerOrderRepository.save(order);
         }
+    }
+
+    private synchronized String allocateInvoiceNumber(Long orderId) {
+        SiteSettings settings = siteSettingsRepository.findTopByOrderByIdAsc().orElse(null);
+        if (settings == null) {
+            return String.format("VRT-INV-%06d", orderId);
+        }
+        String prefix = settings.getInvoicePrefix();
+        if (prefix == null || prefix.isBlank()) {
+            prefix = "INV-";
+        }
+        int padding = settings.getInvoicePadding() == null
+                ? 6
+                : Math.max(1, Math.min(12, settings.getInvoicePadding()));
+        long sequence = settings.getInvoiceNextSequence() == null || settings.getInvoiceNextSequence() < 1L
+                ? 1L
+                : settings.getInvoiceNextSequence();
+        String number = prefix + String.format("%0" + padding + "d", sequence);
+        settings.setInvoiceNextSequence(sequence + 1L);
+        siteSettingsRepository.save(settings);
+        return number;
     }
 
     private boolean canCancel(CustomerOrder order) {
@@ -729,10 +1241,67 @@ public class OrderService {
         };
     }
 
+    private boolean promoteToConfirmedIfPending(CustomerOrder order) {
+        if (order.getStatus() == OrderStatus.PENDING) {
+            order.setStatus(OrderStatus.CONFIRMED);
+            return true;
+        }
+        return false;
+    }
+
+    private void updateUserCheckoutPreferences(User user, OrderRequest request) {
+        user.setPreferredContactName(trimToNull(request.getContactName()));
+        user.setPreferredContactPhone(trimToNull(request.getContactPhone()));
+        user.setPreferredContactEmail(trimToNull(request.getContactEmail()));
+        if (request.getDeliveryType() != null && request.getDeliveryType().name().equals("DELIVERY")) {
+            user.setPreferredDeliveryAddress(trimToNull(request.getDeliveryAddress()));
+        }
+    }
+
+    private List<CheckoutProfileResponse.SavedAddressResponse> buildSavedAddresses(User user, List<CustomerOrder> recentOrders) {
+        List<CheckoutProfileResponse.SavedAddressResponse> savedAddresses = new ArrayList<>();
+        LinkedHashSet<String> seenAddresses = new LinkedHashSet<>();
+        String preferredAddress = trimToNull(user.getPreferredDeliveryAddress());
+
+        userAddressRepository.findByUserIdOrderByDefaultAddressDescUpdatedAtDescIdDesc(user.getId()).forEach(address -> {
+            String normalizedAddress = trimToNull(address.getAddress());
+            if (normalizedAddress == null || !seenAddresses.add(normalizedAddress)) {
+                return;
+            }
+            savedAddresses.add(CheckoutProfileResponse.SavedAddressResponse.builder()
+                    .id("address-" + address.getId())
+                    .label(address.getLabel())
+                    .address(normalizedAddress)
+                    .contactName(trimToNull(address.getContactName()))
+                    .contactPhone(trimToNull(address.getContactPhone()))
+                    .defaultAddress(address.isDefaultAddress())
+                    .build());
+        });
+
+        for (CustomerOrder order : recentOrders) {
+            String address = trimToNull(order.getDeliveryAddress());
+            if (address == null || !seenAddresses.add(address)) {
+                continue;
+            }
+
+            boolean defaultAddress = preferredAddress != null && preferredAddress.equals(address);
+            savedAddresses.add(CheckoutProfileResponse.SavedAddressResponse.builder()
+                    .id("order-" + order.getId())
+                    .label(savedAddresses.isEmpty() ? "Previously used" : "Saved address")
+                    .address(address)
+                    .contactName(trimToNull(order.getContactName()))
+                    .contactPhone(trimToNull(order.getContactPhone()))
+                    .defaultAddress(defaultAddress)
+                    .build());
+        }
+
+        return savedAddresses;
+    }
+
     private void cancelOrder(CustomerOrder order, String reason, User actor, String source) {
         if (order.getStatus() != OrderStatus.CANCELLED) {
             for (OrderItem item : order.getItems()) {
-                releaseInventory(item.getProduct(), item.getQuantity());
+                releaseInventory(item.getProduct(), order.getStore(), item.getQuantity());
             }
         }
         order.setStatus(OrderStatus.CANCELLED);
@@ -766,9 +1335,49 @@ public class OrderService {
         }
         if (status == PaymentTransactionStatus.REFUNDED) {
             transaction.setRefundedAt(LocalDateTime.now());
+            transaction.setRefundedAmount(order.getTotalAmount());
+            transaction.setRefundStatus("RECORDED");
+            transaction.setRefundReason(description);
         }
         transaction.setMetadata(metadata("description", description, "actorEmail", admin.getEmail()));
-        paymentTransactionRepository.save(transaction);
+        PaymentTransaction saved = paymentTransactionRepository.save(transaction);
+        if (status == PaymentTransactionStatus.REFUNDED) {
+            recordRefund(order, saved, saved.getRefundId(), saved.getRefundedAmount(), saved.getRefundStatus(), description);
+        }
+    }
+
+    private void recordRefund(CustomerOrder order, PaymentTransaction transaction, String refundId, BigDecimal amount, String status, String reason) {
+        RefundTransaction refund = new RefundTransaction();
+        refund.setOrder(order);
+        refund.setPaymentTransaction(transaction);
+        refund.setRefundId(refundId);
+        refund.setAmount(amount == null || amount.signum() <= 0 ? order.getTotalAmount() : amount);
+        refund.setStatus(status == null || status.isBlank() ? "RECORDED" : status.toUpperCase(Locale.ROOT));
+        refund.setReason(reason);
+        refund.setRefundedAt(LocalDateTime.now());
+        refundTransactionRepository.save(refund);
+    }
+
+    private BigDecimal paiseToRupees(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return new BigDecimal(String.valueOf(value)).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    private boolean isOnlinePaymentMethod(com.vrtechnologies.vrtech.entity.enums.PaymentMethod paymentMethod) {
+        return paymentMethod != null && !paymentMethod.name().equals("CASH");
+    }
+
+    private boolean withinDateRange(LocalDateTime value, LocalDateTime startDate, LocalDateTime endDate) {
+        if (value == null) {
+            return false;
+        }
+        return (startDate == null || !value.isBefore(startDate)) && (endDate == null || value.isBefore(endDate));
     }
 
     private OrderTimelineEventType timelineTypeForStatus(OrderStatus status) {
@@ -806,11 +1415,19 @@ public class OrderService {
     private String generateInvoiceHtml(CustomerOrder order) {
         ensureOrderIdentifiers(order);
 
+        SiteSettings settings = siteSettingsRepository.findTopByOrderByIdAsc().orElseGet(SiteSettings::new);
+        boolean gstEnabled = settings.isGstEnabled();
+        BigDecimal gstRate = settings.getGstRate() == null ? BigDecimal.ZERO : settings.getGstRate();
+        String defaultHsn = settings.getDefaultHsnCode();
+
         StringBuilder itemsHtml = new StringBuilder();
         for (OrderItem item : order.getItems()) {
-            BigDecimal lineTotal = item.getPriceAtTime().multiply(BigDecimal.valueOf(item.getQuantity()));
+            BigDecimal qty = BigDecimal.valueOf(item.getQuantity());
+            BigDecimal lineTotal = item.getPriceAtTime().multiply(qty);
+            String hsn = defaultString(item.getProduct().getHsnCode(), defaultString(defaultHsn, "-"));
             itemsHtml.append("""
                     <tr>
+                      <td>%s</td>
                       <td>%s</td>
                       <td>%s</td>
                       <td>%s</td>
@@ -818,11 +1435,62 @@ public class OrderService {
                     </tr>
                     """.formatted(
                     escapeHtml(item.getProduct().getTitle()),
+                    escapeHtml(hsn),
                     item.getQuantity(),
                     formatCurrency(item.getPriceAtTime()),
                     formatCurrency(lineTotal)
             ));
         }
+
+        BigDecimal subtotal = order.getSubtotalAmount() == null ? BigDecimal.ZERO : order.getSubtotalAmount();
+        BigDecimal discount = order.getDiscountAmount() == null ? BigDecimal.ZERO : order.getDiscountAmount();
+        BigDecimal tax = order.getTaxAmount() == null ? BigDecimal.ZERO : order.getTaxAmount();
+        BigDecimal delivery = order.getDeliveryCharge() == null ? BigDecimal.ZERO : order.getDeliveryCharge();
+        BigDecimal grand = order.getTotalAmount() == null ? BigDecimal.ZERO : order.getTotalAmount();
+
+        // Determine intra/inter-state for SGST/CGST vs IGST split. If we have both
+        // a company state and a delivery state, and they differ, treat as inter-state (IGST).
+        String companyState = defaultString(settings.getDefaultState(), "");
+        String customerState = defaultString(order.getDeliveryState(), "");
+        boolean interState = !companyState.isBlank() && !customerState.isBlank()
+                && !companyState.equalsIgnoreCase(customerState);
+        BigDecimal halfTax = tax.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+
+        String taxBreakdown;
+        if (gstEnabled && tax.signum() > 0) {
+            if (interState) {
+                taxBreakdown = "<tr><td colspan='4'>IGST @ " + formatPercent(gstRate) + "</td><td>"
+                        + formatCurrency(tax) + "</td></tr>";
+            } else {
+                taxBreakdown = "<tr><td colspan='4'>CGST @ " + formatPercent(gstRate.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP)) + "</td><td>"
+                        + formatCurrency(halfTax) + "</td></tr>"
+                        + "<tr><td colspan='4'>SGST @ " + formatPercent(gstRate.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP)) + "</td><td>"
+                        + formatCurrency(halfTax) + "</td></tr>";
+            }
+        } else {
+            taxBreakdown = "";
+        }
+
+        String companyName = defaultString(settings.getCompanyName(), "VR Technologies");
+        String companyAddressLine = defaultString(settings.getCompanyAddress(), "");
+        String companyCityState = String.join(", ",
+                List.of(
+                        defaultString(settings.getDefaultCity(), ""),
+                        defaultString(settings.getDefaultState(), ""),
+                        defaultString(settings.getCompanyPincode(), "")
+                ).stream().filter(s -> !s.isBlank()).toList());
+        String gstinLine = settings.getGstNumber() != null && !settings.getGstNumber().isBlank()
+                ? "GSTIN: " + escapeHtml(settings.getGstNumber()) : "";
+        String panLine = settings.getCompanyPan() != null && !settings.getCompanyPan().isBlank()
+                ? "PAN: " + escapeHtml(settings.getCompanyPan()) : "";
+        String supportLine = String.join(" · ",
+                List.of(
+                        defaultString(settings.getSupportEmail(), ""),
+                        defaultString(settings.getSupportPhone(), "")
+                ).stream().filter(s -> !s.isBlank()).toList());
+        String terms = settings.getInvoiceTerms() == null || settings.getInvoiceTerms().isBlank()
+                ? "Thank you for shopping with " + escapeHtml(companyName) + ". This invoice was generated digitally and is valid without a signature."
+                : escapeHtml(settings.getInvoiceTerms());
 
         return """
                 <!DOCTYPE html>
@@ -836,15 +1504,19 @@ public class OrderService {
                     .wrap { max-width: 920px; margin: 32px auto; background: #ffffff; border-radius: 24px; padding: 32px; box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08); }
                     .header { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
                     .badge { display: inline-block; padding: 8px 14px; border-radius: 999px; background: #e8f1ff; color: #1e3a8a; font-size: 12px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; }
+                    .gst-pill { display: inline-block; margin-top: 6px; padding: 4px 10px; border-radius: 999px; background: #ecfdf5; color: #065f46; font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
                     h1 { margin: 16px 0 8px; font-size: 34px; }
                     h2 { font-size: 18px; margin: 0 0 12px; }
                     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 28px; }
                     .card { border: 1px solid rgba(30, 58, 138, 0.08); background: #f8fbff; border-radius: 18px; padding: 18px; }
-                    table { width: 100%; border-collapse: collapse; margin-top: 28px; }
-                    th, td { padding: 14px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; }
-                    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.14em; color: #64748b; }
-                    .total { margin-top: 28px; display: flex; justify-content: flex-end; font-size: 24px; font-weight: 700; }
-                    .footer { margin-top: 32px; font-size: 13px; color: #64748b; }
+                    .meta { font-size: 13px; color: #475569; }
+                    table { width: 100%%; border-collapse: collapse; margin-top: 28px; }
+                    th, td { padding: 12px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; font-size: 14px; }
+                    th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; color: #64748b; }
+                    .totals { margin-top: 28px; width: 100%%; max-width: 360px; margin-left: auto; }
+                    .totals td { padding: 8px 10px; border: none; }
+                    .totals tr.grand td { border-top: 2px solid #0f172a; font-weight: 700; font-size: 18px; }
+                    .footer { margin-top: 32px; font-size: 13px; color: #64748b; line-height: 1.6; white-space: pre-line; }
                     @media print { body { background: white; } .wrap { box-shadow: none; margin: 0; max-width: none; border-radius: 0; } }
                   </style>
                 </head>
@@ -852,16 +1524,19 @@ public class OrderService {
                   <div class="wrap">
                     <div class="header">
                       <div>
-                        <div class="badge">Invoice</div>
+                        <div class="badge">%s</div>
                         <h1>%s</h1>
                         <div>Order %s</div>
                         <div>Issued %s</div>
                       </div>
                       <div>
-                        <h2>VR Technologies</h2>
-                        <div>Refurbished systems marketplace</div>
-                        <div>%s</div>
-                        <div>%s</div>
+                        <h2>%s</h2>
+                        <div class="meta">%s</div>
+                        <div class="meta">%s</div>
+                        <div class="meta">%s</div>
+                        %s
+                        %s
+                        %s
                       </div>
                     </div>
 
@@ -869,16 +1544,16 @@ public class OrderService {
                       <div class="card">
                         <h2>Bill To</h2>
                         <div>%s</div>
-                        <div>%s</div>
-                        <div>%s</div>
-                        <div>%s</div>
+                        <div class="meta">%s</div>
+                        <div class="meta">%s</div>
+                        <div class="meta">%s</div>
                       </div>
                       <div class="card">
                         <h2>Fulfilment</h2>
-                        <div>Status: %s</div>
-                        <div>Payment: %s</div>
-                        <div>Method: %s</div>
-                        <div>Store: %s</div>
+                        <div class="meta">Status: %s</div>
+                        <div class="meta">Payment: %s</div>
+                        <div class="meta">Method: %s</div>
+                        <div class="meta">Store: %s</div>
                       </div>
                     </div>
 
@@ -886,6 +1561,7 @@ public class OrderService {
                       <thead>
                         <tr>
                           <th>Product</th>
+                          <th>HSN/SAC</th>
                           <th>Qty</th>
                           <th>Unit Price</th>
                           <th>Line Total</th>
@@ -896,21 +1572,33 @@ public class OrderService {
                       </tbody>
                     </table>
 
-                    <div class="total">Grand Total: %s</div>
+                    <table class="totals">
+                      <tr><td colspan="4">Subtotal</td><td>%s</td></tr>
+                      %s
+                      %s
+                      %s
+                      <tr class="grand"><td colspan="4">Grand Total</td><td>%s</td></tr>
+                    </table>
 
                     <div class="footer">
-                      Thank you for shopping with VR Technologies. This invoice was generated digitally and is valid without a signature.
+                      %s
                     </div>
                   </div>
                 </body>
                 </html>
                 """.formatted(
                 escapeHtml(order.getInvoiceNumber()),
+                gstEnabled ? "Tax Invoice" : "Invoice",
                 escapeHtml(order.getInvoiceNumber()),
                 escapeHtml(order.getOrderNumber()),
                 DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(order.getCreatedAt()),
-                order.getStore() != null ? escapeHtml(order.getStore().getName()) : "Online order",
-                order.getStore() != null ? escapeHtml(order.getStore().getAddress() + ", " + order.getStore().getCity()) : "Website checkout",
+                escapeHtml(companyName),
+                escapeHtml(companyAddressLine.isBlank() ? "Refurbished systems marketplace" : companyAddressLine),
+                escapeHtml(companyCityState),
+                escapeHtml(supportLine),
+                gstinLine.isBlank() ? "" : "<div class='gst-pill'>" + gstinLine + "</div>",
+                panLine.isBlank() ? "" : "<div class='meta'>" + panLine + "</div>",
+                gstEnabled ? "<div class='meta'>GST: " + formatPercent(gstRate) + "</div>" : "",
                 escapeHtml(defaultString(order.getContactName(), "Customer")),
                 escapeHtml(defaultString(order.getContactPhone(), "-")),
                 escapeHtml(defaultString(order.getContactEmail(), "-")),
@@ -920,8 +1608,83 @@ public class OrderService {
                 escapeHtml(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "-"),
                 escapeHtml(order.getStore() != null ? order.getStore().getName() : "Not assigned"),
                 itemsHtml,
-                formatCurrency(order.getTotalAmount())
+                formatCurrency(subtotal),
+                discount.signum() > 0 ? "<tr><td colspan='4'>Discount</td><td>- " + formatCurrency(discount) + "</td></tr>" : "",
+                taxBreakdown,
+                delivery.signum() > 0 ? "<tr><td colspan='4'>Delivery</td><td>" + formatCurrency(delivery) + "</td></tr>" : "",
+                formatCurrency(grand),
+                terms
         );
+    }
+
+    private String formatPercent(BigDecimal value) {
+        if (value == null) return "0%";
+        return value.stripTrailingZeros().toPlainString() + "%";
+    }
+
+    private byte[] generateSimplePdf(CustomerOrder order) {
+        ensureOrderIdentifiers(order);
+        List<String> lines = new ArrayList<>();
+        lines.add("VR Technologies Invoice");
+        lines.add("Invoice: " + defaultString(order.getInvoiceNumber(), "-"));
+        lines.add("Order: " + defaultString(order.getOrderNumber(), "-"));
+        lines.add("Customer: " + defaultString(order.getContactName(), "-"));
+        lines.add("Phone: " + defaultString(order.getContactPhone(), "-"));
+        lines.add("Payment: " + order.getPaymentStatus());
+        lines.add("Status: " + order.getStatus());
+        lines.add(" ");
+        for (OrderItem item : order.getItems()) {
+            lines.add(item.getProduct().getTitle() + " x " + item.getQuantity() + " = "
+                    + formatCurrency(item.getPriceAtTime().multiply(BigDecimal.valueOf(item.getQuantity()))));
+        }
+        lines.add(" ");
+        lines.add("Subtotal: " + formatCurrency(order.getSubtotalAmount()));
+        if (order.getDiscountAmount() != null && order.getDiscountAmount().compareTo(BigDecimal.ZERO) > 0) {
+            lines.add("Coupon " + order.getCouponCode() + ": -" + formatCurrency(order.getDiscountAmount()));
+        }
+        if (order.getTaxAmount() != null && order.getTaxAmount().compareTo(BigDecimal.ZERO) > 0) {
+            lines.add("GST: " + formatCurrency(order.getTaxAmount()));
+        }
+        if (order.getDeliveryCharge() != null && order.getDeliveryCharge().compareTo(BigDecimal.ZERO) > 0) {
+            lines.add("Delivery: " + formatCurrency(order.getDeliveryCharge()));
+        }
+        lines.add("Grand Total: " + formatCurrency(order.getTotalAmount()));
+
+        StringBuilder text = new StringBuilder("BT /F1 12 Tf 50 780 Td 16 TL ");
+        for (String line : lines) {
+            text.append("(").append(escapePdf(line)).append(") Tj T* ");
+        }
+        text.append("ET");
+        byte[] stream = text.toString().getBytes(StandardCharsets.US_ASCII);
+        String header = "%PDF-1.4\n";
+        String obj1 = "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n";
+        String obj2 = "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n";
+        String obj3 = "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n";
+        String obj4 = "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n";
+        String obj5Prefix = "5 0 obj << /Length " + stream.length + " >> stream\n";
+        String obj5Suffix = "\nendstream endobj\n";
+        String[] parts = {header, obj1, obj2, obj3, obj4, obj5Prefix, new String(stream, StandardCharsets.US_ASCII), obj5Suffix};
+        StringBuilder body = new StringBuilder();
+        List<Integer> offsets = new ArrayList<>();
+        int offset = header.length();
+        body.append(header);
+        for (int i = 1; i < parts.length; i++) {
+            if (i <= 5) {
+                offsets.add(body.length());
+            }
+            body.append(parts[i]);
+        }
+        int xref = body.length();
+        body.append("xref\n0 6\n0000000000 65535 f \n");
+        for (Integer item : offsets) {
+            body.append(String.format("%010d 00000 n \n", item));
+        }
+        body.append("trailer << /Size 6 /Root 1 0 R >>\nstartxref\n").append(xref).append("\n%%EOF");
+        return body.toString().getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private String escapePdf(String value) {
+        return defaultString(value, "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)");
     }
 
     private Map<String, Object> nestedEntity(Map<String, Object> payloadMap, String key) {
@@ -967,12 +1730,73 @@ public class OrderService {
         return "Rs. " + safeValue.toPlainString();
     }
 
+    private BigDecimal calculateTax(SiteSettings settings, BigDecimal taxableAmount) {
+        if (settings == null || !settings.isGstEnabled()) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal rate = settings.getGstRate() == null ? BigDecimal.ZERO : settings.getGstRate();
+        return taxableAmount
+                .multiply(rate)
+                .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
+                .max(BigDecimal.ZERO);
+    }
+
+    private BigDecimal calculateDeliveryCharge(SiteSettings settings, OrderRequest request, BigDecimal afterDiscount) {
+        if (settings == null || request.getDeliveryType() == null || !request.getDeliveryType().name().equals("DELIVERY")) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal threshold = settings.getFreeDeliveryThreshold();
+        if (threshold != null && threshold.compareTo(BigDecimal.ZERO) > 0 && afterDiscount.compareTo(threshold) >= 0) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal charge = settings.getStandardDeliveryCharge() == null ? BigDecimal.ZERO : settings.getStandardDeliveryCharge();
+        BigDecimal stateCharge = resolveStateDeliveryCharge(settings.getStateDeliveryCharges(), request.getDeliveryState());
+        if (stateCharge != null) {
+            charge = stateCharge;
+        }
+        return charge.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal resolveStateDeliveryCharge(String rules, String deliveryState) {
+        String targetState = normalizeState(deliveryState);
+        if (rules == null || rules.isBlank() || targetState == null) {
+            return null;
+        }
+        String[] entries = rules.split("\\r?\\n|;");
+        for (String entry : entries) {
+            String[] parts = entry.split("=", 2);
+            if (parts.length != 2 || !normalizeState(parts[0]).equals(targetState)) {
+                continue;
+            }
+            try {
+                return new BigDecimal(parts[1].trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private String normalizeState(String value) {
+        String trimmed = trimToNull(value);
+        return trimmed == null ? null : trimmed.toUpperCase(Locale.ROOT);
+    }
+
     private String trimToNull(String value) {
         if (value == null) {
             return null;
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String digitsOnly(String value) {
+        String trimmed = trimToNull(value);
+        if (trimmed == null) {
+            return null;
+        }
+        String digits = trimmed.replaceAll("\\D", "");
+        return digits.isEmpty() ? null : digits;
     }
 
     private String truncate(String value, int max) {

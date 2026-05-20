@@ -81,4 +81,16 @@ public class PaymentTransaction extends BaseEntity {
     private LocalDateTime paidAt;
 
     private LocalDateTime refundedAt;
+
+    @Column(length = 128)
+    private String refundId;
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal refundedAmount;
+
+    @Column(columnDefinition = "TEXT")
+    private String refundReason;
+
+    @Column(length = 32)
+    private String refundStatus;
 }

@@ -98,8 +98,8 @@ public class CatalogService {
         String mobileImageUrl = resolveMobileImageUrl(request, banner, desktopImageUrl);
         String videoUrl = resolveStringValue(banner.getVideoUrl(), request.getVideoUrl());
         BannerMediaType mediaType = resolveMediaType(banner, request, videoUrl);
-        LocalDateTime resolvedStartAt = resolveDateValue(banner.getStartAt(), request.getStartAt());
-        LocalDateTime resolvedEndAt = resolveDateValue(banner.getEndAt(), request.getEndAt());
+        LocalDateTime resolvedStartAt = resolveDateValue(banner.getStartAt(), request.getStartAt(), request.isStartAtProvided());
+        LocalDateTime resolvedEndAt = resolveDateValue(banner.getEndAt(), request.getEndAt(), request.isEndAtProvided());
         validateBannerRequest(desktopImageUrl, mediaType, videoUrl, resolvedStartAt, resolvedEndAt);
         banner.setTitle(request.getTitle());
         banner.setSubtitle(request.getSubtitle());
@@ -142,6 +142,10 @@ public class CatalogService {
                 .orElseThrow(() -> new ResourceNotFoundException("Brand not found"));
         brand.setName(normalizedName);
         brand.setLogoUrl(request.getLogoUrl() == null || request.getLogoUrl().isBlank() ? null : request.getLogoUrl().trim());
+        brand.setDescription(request.getDescription() == null || request.getDescription().isBlank() ? null : request.getDescription().trim());
+        brand.setSortOrder(request.getSortOrder() == null ? 0 : Math.max(0, request.getSortOrder()));
+        brand.setDiscountPercent(request.getDiscountPercent() == null ? null : Math.max(0, request.getDiscountPercent()));
+        brand.setActive(request.getActive() == null || request.getActive());
         try {
             return brandRepository.save(brand);
         } catch (DataIntegrityViolationException exception) {
@@ -168,6 +172,11 @@ public class CatalogService {
         category.setSlug(request.getSlug());
         category.setIconUrl(request.getIconUrl());
         category.setCompareFields(request.getCompareFields());
+        category.setSeoTitle(request.getSeoTitle());
+        category.setSeoDescription(request.getSeoDescription());
+        category.setSeoKeywords(request.getSeoKeywords());
+        category.setOgImageUrl(request.getOgImageUrl());
+        category.setCanonicalUrl(request.getCanonicalUrl());
         try {
             return categoryRepository.save(category);
         } catch (DataIntegrityViolationException exception) {
@@ -205,6 +214,17 @@ public class CatalogService {
         store.setGoogleReviewCount(request.getGoogleReviewCount());
         store.setActive(request.getActive() == null || request.getActive());
         return storeRepository.save(store);
+    }
+
+    public void deleteStore(User admin, Long id) {
+        Store store = storeRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Store not found"));
+        permissionService.requireStoreAccess(admin, id);
+        try {
+            storeRepository.delete(store);
+        } catch (DataIntegrityViolationException exception) {
+            throw new BadRequestException("Store cannot be deleted while products or orders are linked to it");
+        }
     }
 
     private BannerResponse toBannerResponse(Banner banner) {
@@ -295,8 +315,8 @@ public class CatalogService {
         return normalizeString(requestedValue);
     }
 
-    private LocalDateTime resolveDateValue(LocalDateTime existingValue, LocalDateTime requestedValue) {
-        return requestedValue != null ? requestedValue : existingValue;
+    private LocalDateTime resolveDateValue(LocalDateTime existingValue, LocalDateTime requestedValue, boolean provided) {
+        return provided ? requestedValue : existingValue;
     }
 
     private String normalizeString(String value) {

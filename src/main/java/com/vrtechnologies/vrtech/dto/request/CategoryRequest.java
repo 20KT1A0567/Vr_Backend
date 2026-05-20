@@ -17,4 +17,10 @@ public class CategoryRequest {
     private String iconUrl;
 
     private String compareFields;
+
+    private String seoTitle;
+    private String seoDescription;
+    private String seoKeywords;
+    private String ogImageUrl;
+    private String canonicalUrl;
 }

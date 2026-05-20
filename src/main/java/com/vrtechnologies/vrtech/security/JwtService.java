@@ -36,13 +36,35 @@ public class JwtService {
     }
 
     public String generateAccessToken(UserDetails userDetails) {
+        return generateAccessToken(userDetails, null);
+    }
+
+    public String generateAccessToken(UserDetails userDetails, Long sessionId) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("roles", userDetails.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList());
+        if (sessionId != null) {
+            claims.put("sid", sessionId);
+        }
         return buildToken(claims, userDetails.getUsername(), expiryMs);
     }
 
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
+    }
+
+    public Long extractSessionId(String token) {
+        try {
+            Object value = extractClaim(token, claims -> claims.get("sid"));
+            if (value instanceof Number n) {
+                return n.longValue();
+            }
+            if (value instanceof String s && !s.isBlank()) {
+                return Long.parseLong(s);
+            }
+            return null;
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     public boolean isTokenValid(String token, UserDetails userDetails) {
@@ -93,13 +115,16 @@ public class JwtService {
     }
 
     private Key getSigningKey() {
-        String normalizedSecret = secret;
-        if (!secret.matches("^[A-Za-z0-9+/=]+$")) {
-            normalizedSecret = Base64.getEncoder().encodeToString(secret.getBytes(StandardCharsets.UTF_8));
+        // Use SHA-256 to hash the secret string into a 256-bit (32-byte) key.
+        // This ensures compatibility with HS256 even if the provided secret is short.
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] keyBytes = digest.digest(secret.getBytes(StandardCharsets.UTF_8));
+            return Keys.hmacShaKeyFor(keyBytes);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // Fallback for extreme cases, though SHA-256 is standard in JVM
+            throw new RuntimeException("Failed to initialize JWT signing key", e);
         }
-        byte[] keyBytes = Decoders.BASE64.decode(normalizedSecret);
-        SecretKey key = Keys.hmacShaKeyFor(keyBytes);
-        return key;
     }
 
     private LocalDateTime toLocalDateTime(Instant instant) {

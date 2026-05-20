@@ -1,11 +1,21 @@
 package com.vrtechnologies.vrtech.controller;
 
+import com.vrtechnologies.vrtech.dto.request.BackInStockRequestDto;
+import com.vrtechnologies.vrtech.dto.request.PriceDropAlertRequest;
+import com.vrtechnologies.vrtech.dto.request.RecentProductViewRequest;
 import com.vrtechnologies.vrtech.dto.response.ApiResponse;
+import com.vrtechnologies.vrtech.dto.response.BackInStockRequestResponse;
 import com.vrtechnologies.vrtech.dto.response.ProductResponse;
+import com.vrtechnologies.vrtech.entity.PriceDropAlert;
+import com.vrtechnologies.vrtech.service.BackInStockService;
 import com.vrtechnologies.vrtech.entity.enums.ProductCondition;
+import com.vrtechnologies.vrtech.service.ProductEngagementService;
 import com.vrtechnologies.vrtech.service.ProductService;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -20,9 +30,13 @@ import java.util.List;
 public class ProductController {
 
     private final ProductService productService;
+    private final BackInStockService backInStockService;
+    private final ProductEngagementService productEngagementService;
 
-    public ProductController(ProductService productService) {
+    public ProductController(ProductService productService, BackInStockService backInStockService, ProductEngagementService productEngagementService) {
         this.productService = productService;
+        this.backInStockService = backInStockService;
+        this.productEngagementService = productEngagementService;
     }
 
     @GetMapping
@@ -39,9 +53,16 @@ public class ProductController {
             @RequestParam(required = false) List<Integer> storageOptions,
             @RequestParam(required = false) String processor,
             @RequestParam(required = false) List<String> processorOptions,
+            @RequestParam(required = false) List<String> osOptions,
+            @RequestParam(required = false) List<String> displaySizeOptions,
+            @RequestParam(required = false) List<String> displayTypeOptions,
+            @RequestParam(required = false) List<String> graphicsOptions,
             @RequestParam(required = false) ProductCondition condition,
             @RequestParam(required = false) List<ProductCondition> conditions,
             @RequestParam(required = false) Boolean inStock,
+            @RequestParam(required = false) Boolean featured,
+            @RequestParam(required = false) Boolean bestSeller,
+            @RequestParam(required = false) Boolean todayDeal,
             @RequestParam(required = false) BigDecimal minPrice,
             @RequestParam(required = false) BigDecimal maxPrice
     ) {
@@ -55,8 +76,15 @@ public class ProductController {
                         mergeParamValues(ramGb, ramOptions),
                         mergeParamValues(storageGb, storageOptions),
                         mergeParamValues(processor, processorOptions),
+                        osOptions,
+                        displaySizeOptions,
+                        displayTypeOptions,
+                        graphicsOptions,
                         mergeParamValues(condition, conditions),
                         inStock,
+                        featured,
+                        bestSeller,
+                        todayDeal,
                         minPrice,
                         maxPrice
                 )
@@ -71,6 +99,27 @@ public class ProductController {
     @GetMapping("/{id}")
     public ApiResponse<ProductResponse> getProduct(@PathVariable Long id) {
         return ApiResponse.ok("Product fetched", productService.getProduct(id, false));
+    }
+
+    @PostMapping("/back-in-stock")
+    public ApiResponse<BackInStockRequestResponse> backInStock(@Valid @RequestBody BackInStockRequestDto request) {
+        return ApiResponse.ok("Back-in-stock request saved", backInStockService.create(request));
+    }
+
+    @PostMapping("/recently-viewed")
+    public ApiResponse<Object> recordRecentView(@Valid @RequestBody RecentProductViewRequest request) {
+        productEngagementService.recordView(request);
+        return ApiResponse.ok("Product view recorded", null);
+    }
+
+    @GetMapping("/recently-viewed")
+    public ApiResponse<List<ProductResponse>> recentViews(@RequestParam(required = false) String anonymousId) {
+        return ApiResponse.ok("Recently viewed products fetched", productEngagementService.recent(anonymousId));
+    }
+
+    @PostMapping("/price-drop-alerts")
+    public ApiResponse<PriceDropAlert> priceDropAlert(@Valid @RequestBody PriceDropAlertRequest request) {
+        return ApiResponse.ok("Price-drop alert saved", productEngagementService.createPriceDropAlert(request));
     }
 
     private <T> List<T> mergeParamValues(T singleValue, List<T> multipleValues) {

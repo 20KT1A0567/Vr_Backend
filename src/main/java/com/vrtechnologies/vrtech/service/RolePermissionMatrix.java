@@ -55,6 +55,7 @@ public class RolePermissionMatrix {
         manager.put(Module.STORES, EnumSet.copyOf(READ_WRITE));
         manager.put(Module.BANNERS, EnumSet.copyOf(READ_WRITE_DELETE));
         manager.put(Module.COUPONS, EnumSet.copyOf(READ_WRITE_DELETE));
+        manager.put(Module.REVIEWS, EnumSet.copyOf(ALL_ACTIONS));
         manager.put(Module.ORDERS, EnumSet.copyOf(ALL_ACTIONS));
         manager.put(Module.CUSTOMERS, EnumSet.copyOf(READ_WRITE));
         manager.put(Module.INVENTORY, EnumSet.copyOf(READ_WRITE));
@@ -74,6 +75,7 @@ public class RolePermissionMatrix {
         storeManager.put(Module.CUSTOMERS, EnumSet.copyOf(READ_ONLY));
         storeManager.put(Module.ENQUIRIES, EnumSet.copyOf(READ_WRITE));
         storeManager.put(Module.COUPONS, EnumSet.copyOf(READ_ONLY));
+        storeManager.put(Module.REVIEWS, EnumSet.copyOf(READ_WRITE));
         storeManager.put(Module.SERVICES, EnumSet.copyOf(READ_WRITE));
         storeManager.put(Module.STORES, EnumSet.copyOf(READ_ONLY));
         storeManager.put(Module.REPORTS, EnumSet.copyOf(READ_ONLY));
@@ -86,6 +88,7 @@ public class RolePermissionMatrix {
         salesExec.put(Module.ORDERS, EnumSet.copyOf(READ_WRITE));
         salesExec.put(Module.CUSTOMERS, EnumSet.copyOf(READ_WRITE));
         salesExec.put(Module.COUPONS, EnumSet.copyOf(READ_ONLY));
+        salesExec.put(Module.REVIEWS, EnumSet.copyOf(READ_ONLY));
         salesExec.put(Module.ENQUIRIES, EnumSet.copyOf(READ_WRITE));
         matrix.put(Role.SALES_EXECUTIVE, salesExec);
 
@@ -93,6 +96,7 @@ public class RolePermissionMatrix {
         Map<Module, EnumSet<PermissionAction>> support = new EnumMap<>(Module.class);
         support.put(Module.DASHBOARD, EnumSet.copyOf(READ_ONLY));
         support.put(Module.ENQUIRIES, EnumSet.copyOf(READ_WRITE));
+        support.put(Module.REVIEWS, EnumSet.copyOf(READ_WRITE));
         support.put(Module.SERVICES, EnumSet.copyOf(READ_WRITE));
         support.put(Module.CUSTOMERS, EnumSet.copyOf(READ_ONLY));
         matrix.put(Role.SUPPORT_AGENT, support);
@@ -105,6 +109,7 @@ public class RolePermissionMatrix {
         inventoryManager.put(Module.CATEGORIES, EnumSet.copyOf(READ_WRITE_DELETE));
         inventoryManager.put(Module.BRANDS, EnumSet.copyOf(READ_WRITE_DELETE));
         inventoryManager.put(Module.COUPONS, EnumSet.copyOf(READ_ONLY));
+        inventoryManager.put(Module.REVIEWS, EnumSet.copyOf(READ_ONLY));
         inventoryManager.put(Module.REPORTS, EnumSet.copyOf(READ_EXPORT));
         matrix.put(Role.INVENTORY_MANAGER, inventoryManager);
 
@@ -112,6 +117,7 @@ public class RolePermissionMatrix {
         Map<Module, EnumSet<PermissionAction>> contentManager = new EnumMap<>(Module.class);
         contentManager.put(Module.DASHBOARD, EnumSet.copyOf(READ_ONLY));
         contentManager.put(Module.BANNERS, EnumSet.copyOf(ALL_ACTIONS));
+        contentManager.put(Module.REVIEWS, EnumSet.copyOf(ALL_ACTIONS));
         contentManager.put(Module.WEBSITE_CONTENT, EnumSet.copyOf(ALL_ACTIONS));
         contentManager.put(Module.CATEGORIES, EnumSet.copyOf(READ_ONLY));
         contentManager.put(Module.PRODUCTS, EnumSet.copyOf(READ_ONLY));

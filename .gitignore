@@ -10,7 +10,9 @@ target/
 out/
 .env
 .env.*
+env.list.txt
 anushabazaar-2288e-firebase-adminsdk-*.json
 *-firebase-adminsdk-*.json
 firebase-service-account*.json
+src/main/resources/firebase.json
 src/main/resources/application-local.properties

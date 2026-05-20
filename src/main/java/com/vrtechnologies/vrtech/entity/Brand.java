@@ -23,4 +23,13 @@ public class Brand {
     private String name;
 
     private String logoUrl;
+
+    @Column(length = 1000)
+    private String description;
+
+    private Integer sortOrder = 0;
+
+    private Integer discountPercent;
+
+    private Boolean active = true;
 }

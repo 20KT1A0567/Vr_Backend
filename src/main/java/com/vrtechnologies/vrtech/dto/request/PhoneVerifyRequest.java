@@ -10,4 +10,6 @@ public class PhoneVerifyRequest {
 
     @NotBlank
     private String idToken;
+
+    private String sessionInfo;
 }

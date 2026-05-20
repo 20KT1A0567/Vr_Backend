@@ -29,4 +29,16 @@ public class Category {
 
     @Column(name = "compare_fields", length = 1000)
     private String compareFields;
+
+    private String seoTitle;
+
+    @Column(columnDefinition = "TEXT")
+    private String seoDescription;
+
+    @Column(columnDefinition = "TEXT")
+    private String seoKeywords;
+
+    private String ogImageUrl;
+
+    private String canonicalUrl;
 }

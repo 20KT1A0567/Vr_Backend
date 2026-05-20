@@ -39,6 +39,15 @@ public class Coupon extends BaseEntity {
     @Column(nullable = false)
     private Integer usageLimit = 0;
 
+    @Column(nullable = false)
+    private Integer usageCount = 0;
+
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal totalDiscountGiven = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal totalRevenueGenerated = BigDecimal.ZERO;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private CouponStatus status = CouponStatus.ACTIVE;

@@ -39,6 +39,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.ArrayList;
@@ -49,6 +50,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 @Service
@@ -123,6 +125,12 @@ public class SuperAdminService {
         user.setAccessEndDate(request.getAccessEndDate());
         user.setAllowedLoginStartTime(request.getAllowedLoginStartTime());
         user.setAllowedLoginEndTime(request.getAllowedLoginEndTime());
+        user.setAllowedLoginDaysFromSet(parseDaysOfWeek(request.getAllowedLoginDays()));
+        if (request.getTwoFactorEnabled() != null) {
+            user.setTwoFactorEnabled(request.getTwoFactorEnabled());
+        } else {
+            user.setTwoFactorEnabled(role == Role.SUPER_ADMIN);
+        }
         user.setCreatedBy(actor.getId());
 
         user = userRepository.save(user);
@@ -180,6 +188,15 @@ public class SuperAdminService {
         validateLoginWindow(request.getAllowedLoginStartTime(), request.getAllowedLoginEndTime());
         user.setAllowedLoginStartTime(request.getAllowedLoginStartTime());
         user.setAllowedLoginEndTime(request.getAllowedLoginEndTime());
+        if (request.getAllowedLoginDays() != null) {
+            user.setAllowedLoginDaysFromSet(parseDaysOfWeek(request.getAllowedLoginDays()));
+        }
+        if (request.getTwoFactorEnabled() != null) {
+            if (user.getRole() == Role.SUPER_ADMIN && !request.getTwoFactorEnabled()) {
+                throw new BadRequestException("Two-factor authentication cannot be disabled for SUPER_ADMIN accounts");
+            }
+            user.setTwoFactorEnabled(request.getTwoFactorEnabled());
+        }
 
         user = userRepository.save(user);
 
@@ -245,6 +262,9 @@ public class SuperAdminService {
         if (request.getPermissions() != null) {
             for (AdminPermissionsRequest.Entry entry : request.getPermissions()) {
                 if (entry.getModule() == null || entry.getAction() == null) {
+                    continue;
+                }
+                if (user.getRole() != Role.SUPER_ADMIN && entry.getAction() == PermissionAction.DELETE) {
                     continue;
                 }
                 AdminPermission permission = new AdminPermission();
@@ -332,8 +352,8 @@ public class SuperAdminService {
                 .displayName(role.getDisplayName())
                 .description(role.getDescription())
                 .active(role.isActive())
-                .protectedRole(role.isProtectedRole())
-                .systemRole(role.isSystemRole())
+                .protectedRole(isCoreSuperAdminRole(role))
+                .systemRole(isCoreSuperAdminRole(role))
                 .adminCount(countAdminsForRole(role))
                 .entries(entries)
                 .build();
@@ -349,7 +369,7 @@ public class SuperAdminService {
             role.setDescription(normalizeText(request.getDescription()));
         }
         if (request.getActive() != null) {
-            if (role.isProtectedRole() && !request.getActive()) {
+            if (isCoreSuperAdminRole(role) && !request.getActive()) {
                 throw new BadRequestException("Protected roles cannot be disabled");
             }
             if (!request.getActive() && countAdminsForRole(role) > 0) {
@@ -368,16 +388,26 @@ public class SuperAdminService {
     @Transactional
     public void deleteRole(String roleKey) {
         AdminRole role = mustGetRole(roleKey);
-        if (role.isProtectedRole()) {
+        if (isCoreSuperAdminRole(role)) {
             throw new BadRequestException("Protected roles cannot be deleted");
         }
-        if (countAdminsForRole(role) > 0) {
-            throw new BadRequestException("Role cannot be deleted while assigned to admins");
-        }
+        User actor = userContextService.getCurrentUser();
+        userRepository.findAll().stream()
+                .filter(User::isAdmin)
+                .filter(user -> roleMatches(user, role))
+                .forEach(user -> {
+                    if (Objects.equals(user.getId(), actor.getId())) {
+                        throw new BadRequestException("You cannot delete your own assigned role");
+                    }
+                    user.setRole(Role.USER);
+                    user.setAdminRoleKey(null);
+                    user.setAdminStatus(AdminStatus.DISABLED);
+                    user.setActive(false);
+                    userRepository.save(user);
+                });
         rolePermissionRepository.deleteByRole(role.getRoleKey());
         adminRoleRepository.delete(role);
 
-        User actor = userContextService.getCurrentUser();
         activityLogService.log(actor, Module.ADMINS, PermissionAction.DELETE, "Role", null, role.getRoleKey(), null,
                 "Deleted role " + role.getRoleKey());
     }
@@ -395,6 +425,9 @@ public class SuperAdminService {
         if (request.getPermissions() != null) {
             for (RolePermissionsRequest.Entry entry : request.getPermissions()) {
                 if (entry.getModule() == null || entry.getAction() == null) {
+                    continue;
+                }
+                if (entry.getAction() == PermissionAction.DELETE) {
                     continue;
                 }
                 RolePermission permission = new RolePermission();
@@ -478,6 +511,23 @@ public class SuperAdminService {
         }
     }
 
+    private Set<DayOfWeek> parseDaysOfWeek(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return new TreeSet<>();
+        }
+        Set<DayOfWeek> result = new TreeSet<>();
+        for (String value : values) {
+            if (value == null || value.isBlank()) continue;
+            String normalized = value.trim().toUpperCase(Locale.ROOT);
+            try {
+                result.add(DayOfWeek.valueOf(normalized));
+            } catch (IllegalArgumentException ex) {
+                throw new BadRequestException("Invalid day of week: " + value);
+            }
+        }
+        return result;
+    }
+
     private void validateAssignableRole(Role role) {
         if (role == null) {
             throw new BadRequestException("Role is required");
@@ -489,9 +539,6 @@ public class SuperAdminService {
 
     private void validateCustomBaseRole(Role role) {
         validateAssignableRole(role);
-        if (role == Role.SUPER_ADMIN) {
-            throw new BadRequestException("Custom roles cannot inherit SUPER_ADMIN");
-        }
     }
 
     private User mustGet(Long id) {
@@ -526,6 +573,8 @@ public class SuperAdminService {
                 .accessEndDate(user.getAccessEndDate())
                 .allowedLoginStartTime(user.getAllowedLoginStartTime())
                 .allowedLoginEndTime(user.getAllowedLoginEndTime())
+                .allowedLoginDays(user.allowedLoginDaysSet().stream().map(Enum::name).toList())
+                .twoFactorEnabled(user.isTwoFactorEnabled())
                 .lastLoginAt(user.getLastLoginAt())
                 .createdBy(user.getCreatedBy())
                 .createdAt(user.getCreatedAt())
@@ -584,6 +633,10 @@ public class SuperAdminService {
         return role.getRoleKey().equalsIgnoreCase(roleKey);
     }
 
+    private boolean isCoreSuperAdminRole(AdminRole role) {
+        return role != null && role.getBaseRole() == Role.SUPER_ADMIN && Role.SUPER_ADMIN.name().equals(role.getRoleKey());
+    }
+
     private AdminRoleResponse toRoleSummary(AdminRole role) {
         return AdminRoleResponse.builder()
                 .roleKey(role.getRoleKey())
@@ -591,8 +644,8 @@ public class SuperAdminService {
                 .description(role.getDescription())
                 .baseRole(role.getBaseRole())
                 .active(role.isActive())
-                .protectedRole(role.isProtectedRole())
-                .systemRole(role.isSystemRole())
+                .protectedRole(isCoreSuperAdminRole(role))
+                .systemRole(isCoreSuperAdminRole(role))
                 .adminCount(countAdminsForRole(role))
                 .build();
     }

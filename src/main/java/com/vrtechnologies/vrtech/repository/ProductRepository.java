@@ -8,5 +8,6 @@ import java.util.List;
 
 public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpecificationExecutor<Product> {
     List<Product> findTop8ByFeaturedTrueAndAvailableTrueOrderByUpdatedAtDesc();
+    List<Product> findByAvailableTrueOrderByUpdatedAtDesc();
     List<Product> findByIdIn(List<Long> ids);
 }

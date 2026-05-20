@@ -7,6 +7,8 @@ import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.List;
+
 @Getter
 @Setter
 public class OrderRequest {
@@ -28,5 +30,8 @@ public class OrderRequest {
 
     private String contactEmail;
     private String deliveryAddress;
+    private String deliveryState;
     private String notes;
+    private String couponCode;
+    private List<OrderItemRequest> items;
 }

@@ -144,6 +144,15 @@ public class Product extends BaseEntity {
     @Column(length = 500)
     private String seoKeywords;
 
+    @Column(length = 40)
+    private String hsnCode;
+
+    @Column(precision = 5, scale = 2)
+    private BigDecimal gstRatePercent;
+
+    @Column(nullable = false)
+    private boolean taxable = true;
+
     private Integer lowStockThreshold;
 
     @Column(columnDefinition = "TEXT")

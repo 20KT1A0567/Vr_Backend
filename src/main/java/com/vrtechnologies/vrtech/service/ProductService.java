@@ -1,5 +1,7 @@
 package com.vrtechnologies.vrtech.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vrtechnologies.vrtech.dto.request.ProductBulkActionRequest;
 import com.vrtechnologies.vrtech.dto.request.ProductImageRequest;
 import com.vrtechnologies.vrtech.dto.request.ProductRequest;
@@ -7,12 +9,15 @@ import com.vrtechnologies.vrtech.dto.response.MediaUploadResponse;
 import com.vrtechnologies.vrtech.dto.response.ProductImageResponse;
 import com.vrtechnologies.vrtech.dto.response.ProductResponse;
 import com.vrtechnologies.vrtech.dto.response.StoreSummaryResponse;
+import com.vrtechnologies.vrtech.dto.response.StoreAvailabilityResponse;
 import com.vrtechnologies.vrtech.entity.Brand;
 import com.vrtechnologies.vrtech.entity.Category;
 import com.vrtechnologies.vrtech.entity.Product;
 import com.vrtechnologies.vrtech.entity.ProductImage;
 import com.vrtechnologies.vrtech.entity.Store;
 import com.vrtechnologies.vrtech.entity.User;
+import com.vrtechnologies.vrtech.entity.enums.Module;
+import com.vrtechnologies.vrtech.entity.enums.PermissionAction;
 import com.vrtechnologies.vrtech.entity.enums.ProductCondition;
 import com.vrtechnologies.vrtech.entity.enums.ProductBulkActionType;
 import com.vrtechnologies.vrtech.entity.enums.ProductStatus;
@@ -22,12 +27,14 @@ import com.vrtechnologies.vrtech.repository.BrandRepository;
 import com.vrtechnologies.vrtech.repository.CategoryRepository;
 import com.vrtechnologies.vrtech.repository.ProductImageRepository;
 import com.vrtechnologies.vrtech.repository.ProductRepository;
+import com.vrtechnologies.vrtech.repository.ProductStoreStockRepository;
 import com.vrtechnologies.vrtech.repository.StoreRepository;
 import jakarta.persistence.criteria.Join;
 import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,12 +44,16 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 @Service
 public class ProductService {
@@ -50,13 +61,19 @@ public class ProductService {
     private static final int MIN_PRODUCT_IMAGES = 1;
     private static final int MAX_PRODUCT_IMAGES = 20;
 
+    private static final String AUDIT_ENTITY_TYPE = "Product";
+    private static final ObjectMapper AUDIT_MAPPER = new ObjectMapper();
+
     private final ProductRepository productRepository;
     private final BrandRepository brandRepository;
     private final CategoryRepository categoryRepository;
     private final StoreRepository storeRepository;
     private final ProductImageRepository productImageRepository;
+    private final ProductStoreStockRepository productStoreStockRepository;
     private final CloudinaryService cloudinaryService;
     private final PermissionService permissionService;
+    private final AdminActivityLogService activityLogService;
+    private final NotificationService notificationService;
 
     public ProductService(
             ProductRepository productRepository,
@@ -64,16 +81,38 @@ public class ProductService {
             CategoryRepository categoryRepository,
             StoreRepository storeRepository,
             ProductImageRepository productImageRepository,
+            ProductStoreStockRepository productStoreStockRepository,
             CloudinaryService cloudinaryService,
-            PermissionService permissionService
+            PermissionService permissionService,
+            AdminActivityLogService activityLogService,
+            NotificationService notificationService
     ) {
         this.productRepository = productRepository;
         this.brandRepository = brandRepository;
         this.categoryRepository = categoryRepository;
         this.storeRepository = storeRepository;
         this.productImageRepository = productImageRepository;
+        this.productStoreStockRepository = productStoreStockRepository;
         this.cloudinaryService = cloudinaryService;
         this.permissionService = permissionService;
+        this.activityLogService = activityLogService;
+        this.notificationService = notificationService;
+    }
+
+    @Scheduled(fixedDelayString = "${app.low-stock-alerts.worker.delay-ms:900000}")
+    public void queueLowStockAlerts() {
+        for (Product product : productRepository.findAll()) {
+            int threshold = product.getLowStockThreshold() == null ? 5 : product.getLowStockThreshold();
+            int stock = product.getStockQuantity() == null ? 0 : product.getStockQuantity();
+            if (threshold > 0 && stock <= threshold) {
+                notificationService.logInApp(
+                        "LOW_STOCK",
+                        "Low stock: " + product.getTitle(),
+                        product.getTitle() + " has " + stock + " units left.",
+                        null
+                );
+            }
+        }
     }
 
     public List<ProductResponse> getPublicProducts(
@@ -84,8 +123,15 @@ public class ProductService {
             List<Integer> ramOptions,
             List<Integer> storageOptions,
             List<String> processorOptions,
+            List<String> osOptions,
+            List<String> displaySizeOptions,
+            List<String> displayTypeOptions,
+            List<String> graphicsOptions,
             List<ProductCondition> conditions,
             Boolean inStock,
+            Boolean featured,
+            Boolean bestSeller,
+            Boolean todayDeal,
             BigDecimal minPrice,
             BigDecimal maxPrice
     ) {
@@ -97,8 +143,15 @@ public class ProductService {
                 .and(byRamOptions(ramOptions))
                 .and(byStorageOptions(storageOptions))
                 .and(byProcessors(processorOptions))
+                .and(byTextOptions("os", osOptions))
+                .and(byTextOptions("displaySize", displaySizeOptions))
+                .and(byTextOptions("displayType", displayTypeOptions))
+                .and(byTextOptions("graphicsCard", graphicsOptions))
                 .and(byConditions(conditions))
                 .and(byStockAvailability(inStock))
+                .and(byFeatured(featured))
+                .and(byBestSeller(bestSeller))
+                .and(byTodayDeal(todayDeal))
                 .and(minPrice(minPrice))
                 .and(maxPrice(maxPrice));
 
@@ -214,7 +267,7 @@ public class ProductService {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
 
-        if (!adminView && !isPubliclyVisible(product)) {
+        if (!adminView && !isPublicDetailVisible(product)) {
             throw new ResourceNotFoundException("Product not found");
         }
 
@@ -228,7 +281,13 @@ public class ProductService {
         Product product = new Product();
         applyRequest(product, request);
         attachImages(product, request.getImages());
-        return toProductResponse(productRepository.save(product));
+        Product saved = productRepository.save(product);
+        syncStoreStockRows(saved);
+
+        Map<String, Object> snapshot = productSnapshot(saved);
+        activityLogService.log(admin, Module.PRODUCTS, PermissionAction.CREATE, AUDIT_ENTITY_TYPE, saved.getId(),
+                null, encode(snapshot), "Created product: " + saved.getTitle());
+        return toProductResponse(saved);
     }
 
     @Transactional
@@ -237,16 +296,35 @@ public class ProductService {
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
         requireProductAccess(admin, product);
         validateRequestedStoreAccess(admin, request.getStoreIds());
+
+        Map<String, Object> before = productSnapshot(product);
         applyRequest(product, request);
         validateImageCount(product.getImages().size());
-        return toProductResponse(productRepository.save(product));
+        Product saved = productRepository.save(product);
+        syncStoreStockRows(saved);
+        Map<String, Object> after = productSnapshot(saved);
+
+        Map<String, Object> oldDiff = new TreeMap<>();
+        Map<String, Object> newDiff = new TreeMap<>();
+        diffSnapshots(before, after, oldDiff, newDiff);
+        if (!newDiff.isEmpty()) {
+            activityLogService.log(admin, Module.PRODUCTS, PermissionAction.UPDATE, AUDIT_ENTITY_TYPE, saved.getId(),
+                    encode(oldDiff), encode(newDiff), "Updated product: " + saved.getTitle()
+                            + " — fields: " + String.join(", ", newDiff.keySet()));
+        }
+        return toProductResponse(saved);
     }
 
     public void deleteProduct(User admin, Long id) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
         requireProductAccess(admin, product);
+        Map<String, Object> snapshot = productSnapshot(product);
+        Long productId = product.getId();
+        String title = product.getTitle();
         productRepository.delete(product);
+        activityLogService.log(admin, Module.PRODUCTS, PermissionAction.DELETE, AUDIT_ENTITY_TYPE, productId,
+                encode(snapshot), null, "Deleted product: " + title);
     }
 
     @Transactional
@@ -273,8 +351,20 @@ public class ProductService {
             requireProductAccess(admin, product);
         }
 
+        Map<Long, Map<String, Object>> snapshotsBefore = new LinkedHashMap<>();
+        for (Product product : products) {
+            snapshotsBefore.put(product.getId(), productSnapshot(product));
+        }
+
         switch (action) {
-            case DELETE -> productRepository.deleteAll(products);
+            case DELETE -> {
+                products.forEach(product -> activityLogService.log(admin, Module.PRODUCTS, PermissionAction.DELETE,
+                        AUDIT_ENTITY_TYPE, product.getId(),
+                        encode(snapshotsBefore.get(product.getId())), null,
+                        "Bulk delete: " + product.getTitle()));
+                productRepository.deleteAll(products);
+                return;
+            }
             case SET_VISIBILITY -> {
                 if (request.getVisible() == null) {
                     throw new BadRequestException("Visibility value is required");
@@ -318,6 +408,20 @@ public class ProductService {
                 }
                 products.forEach(product -> product.setBestSeller(request.getEnabled()));
                 productRepository.saveAll(products);
+            }
+        }
+
+        for (Product product : products) {
+            Map<String, Object> after = productSnapshot(product);
+            Map<String, Object> oldDiff = new TreeMap<>();
+            Map<String, Object> newDiff = new TreeMap<>();
+            diffSnapshots(snapshotsBefore.get(product.getId()), after, oldDiff, newDiff);
+            if (!newDiff.isEmpty()) {
+                activityLogService.log(admin, Module.PRODUCTS, PermissionAction.UPDATE,
+                        AUDIT_ENTITY_TYPE, product.getId(),
+                        encode(oldDiff), encode(newDiff),
+                        "Bulk " + action.name() + ": " + product.getTitle()
+                                + " — fields: " + String.join(", ", newDiff.keySet()));
             }
         }
     }
@@ -383,7 +487,11 @@ public class ProductService {
                     copy.getImages().add(image);
                 });
 
-        return toProductResponse(productRepository.save(copy));
+        Product savedCopy = productRepository.save(copy);
+        activityLogService.log(admin, Module.PRODUCTS, PermissionAction.CREATE, AUDIT_ENTITY_TYPE, savedCopy.getId(),
+                null, encode(productSnapshot(savedCopy)),
+                "Duplicated from product #" + source.getId() + " (" + source.getTitle() + ")");
+        return toProductResponse(savedCopy);
     }
 
     @Transactional
@@ -396,6 +504,7 @@ public class ProductService {
             throw new BadRequestException("A product can have maximum 20 images");
         }
 
+        int beforeCount = product.getImages().size();
         MediaUploadResponse uploaded = cloudinaryService.uploadImage(file, "products");
         ProductImage image = new ProductImage();
         image.setProduct(product);
@@ -404,7 +513,13 @@ public class ProductService {
         image.setSortOrder(product.getImages().size());
         image.setPrimaryImage(product.getImages().isEmpty());
         product.getImages().add(image);
-        return toProductResponse(productRepository.save(product));
+        Product saved = productRepository.save(product);
+
+        activityLogService.log(admin, Module.PRODUCTS, PermissionAction.UPDATE, AUDIT_ENTITY_TYPE, saved.getId(),
+                encode(Map.of("imageCount", beforeCount)),
+                encode(Map.of("imageCount", saved.getImages().size(), "addedImageUrl", uploaded.getUrl())),
+                "Uploaded image to product: " + saved.getTitle());
+        return toProductResponse(saved);
     }
 
     @Transactional
@@ -424,6 +539,8 @@ public class ProductService {
             throw new BadRequestException("A product must have at least 1 image");
         }
 
+        int beforeCount = product.getImages().size();
+        String removedUrl = image.getImageUrl();
         cloudinaryService.deleteAsset(image.getPublicId());
         product.getImages().remove(image);
         productImageRepository.delete(image);
@@ -432,7 +549,12 @@ public class ProductService {
             product.getImages().stream().min(Comparator.comparing(ProductImage::getSortOrder)).ifPresent(img -> img.setPrimaryImage(true));
         }
 
-        return toProductResponse(productRepository.save(product));
+        Product saved = productRepository.save(product);
+        activityLogService.log(admin, Module.PRODUCTS, PermissionAction.UPDATE, AUDIT_ENTITY_TYPE, saved.getId(),
+                encode(Map.of("imageCount", beforeCount, "removedImageUrl", removedUrl)),
+                encode(Map.of("imageCount", saved.getImages().size())),
+                "Removed image from product: " + saved.getTitle());
+        return toProductResponse(saved);
     }
 
     public ProductResponse toProductResponse(Product product) {
@@ -479,10 +601,14 @@ public class ProductService {
                 .seoTitle(product.getSeoTitle())
                 .seoDescription(product.getSeoDescription())
                 .seoKeywords(product.getSeoKeywords())
+                .hsnCode(product.getHsnCode())
+                .gstRatePercent(product.getGstRatePercent())
+                .taxable(product.isTaxable())
                 .lowStockThreshold(product.getResolvedLowStockThreshold())
                 .description(product.getDescription())
                 .customAttributes(product.getCustomAttributes())
                 .stores(product.getStores().stream().map(this::toStoreSummaryResponse).toList())
+                .storeAvailability(product.getStores().stream().map(store -> toStoreAvailabilityResponse(product, store)).toList())
                 .images(product.getImages().stream()
                         .sorted(Comparator.comparing(ProductImage::getSortOrder).thenComparing(ProductImage::getId))
                         .map(image -> ProductImageResponse.builder()
@@ -517,6 +643,40 @@ public class ProductService {
                 .googleReviewCount(store.getGoogleReviewCount())
                 .active(store.isActive())
                 .build();
+    }
+
+    private StoreAvailabilityResponse toStoreAvailabilityResponse(Product product, Store store) {
+        int stock = productStoreStockRepository.findByProductIdAndStoreId(product.getId(), store.getId())
+                .map(row -> row.getStockQuantity() == null ? 0 : row.getStockQuantity())
+                .orElseGet(() -> product.getStores().stream().findFirst().map(firstStore ->
+                        firstStore.getId().equals(store.getId()) ? (product.getStockQuantity() == null ? 0 : product.getStockQuantity()) : 0
+                ).orElse(product.getStockQuantity() == null ? 0 : product.getStockQuantity()));
+        return StoreAvailabilityResponse.builder()
+                .storeId(store.getId())
+                .storeName(store.getName())
+                .city(store.getCity())
+                .stockQuantity(stock)
+                .available(store.isActive() && product.isAvailable() && stock > 0)
+                .build();
+    }
+
+    private void syncStoreStockRows(Product product) {
+        if (product.getId() == null || product.getStores() == null || product.getStores().isEmpty()) {
+            return;
+        }
+        boolean noRowsYet = productStoreStockRepository.findByProductId(product.getId()).isEmpty();
+        boolean assignedInitialStock = false;
+        for (Store store : product.getStores()) {
+            if (productStoreStockRepository.findByProductIdAndStoreId(product.getId(), store.getId()).isPresent()) {
+                continue;
+            }
+            com.vrtechnologies.vrtech.entity.ProductStoreStock row = new com.vrtechnologies.vrtech.entity.ProductStoreStock();
+            row.setProduct(product);
+            row.setStore(store);
+            row.setStockQuantity(noRowsYet && !assignedInitialStock ? (product.getStockQuantity() == null ? 0 : product.getStockQuantity()) : 0);
+            assignedInitialStock = true;
+            productStoreStockRepository.save(row);
+        }
     }
 
     private void applyRequest(Product product, ProductRequest request) {
@@ -575,6 +735,9 @@ public class ProductService {
         product.setSeoTitle(resolveStringValue(product.getSeoTitle(), request.getSeoTitle()));
         product.setSeoDescription(resolveStringValue(product.getSeoDescription(), request.getSeoDescription()));
         product.setSeoKeywords(resolveStringValue(product.getSeoKeywords(), request.getSeoKeywords()));
+        product.setHsnCode(normalizeUpper(resolveStringValue(product.getHsnCode(), request.getHsnCode())));
+        product.setGstRatePercent(request.getGstRatePercent());
+        product.setTaxable(request.getTaxable() == null || request.getTaxable());
         product.setLowStockThreshold(resolvedLowStockThreshold == null ? 5 : resolvedLowStockThreshold);
         product.setDescription(request.getDescription());
         product.setCustomAttributes(normalizeCustomAttributes(request.getCustomAttributes()));
@@ -653,6 +816,14 @@ public class ProductService {
         return product != null
                 && product.isAvailable()
                 && (product.getProductStatus() == null || product.getEffectiveProductStatus() == ProductStatus.ACTIVE);
+    }
+
+    private boolean isPublicDetailVisible(Product product) {
+        if (product == null) {
+            return false;
+        }
+        ProductStatus status = product.getEffectiveProductStatus();
+        return status == ProductStatus.ACTIVE || status == ProductStatus.INACTIVE;
     }
 
     private Specification<Product> publicVisibility() {
@@ -830,6 +1001,23 @@ public class ProductService {
         );
     }
 
+    private Specification<Product> byTextOptions(String fieldName, List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+
+        List<String> normalizedValues = values.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(value -> value.trim().toLowerCase())
+                .toList();
+
+        if (normalizedValues.isEmpty()) {
+            return null;
+        }
+
+        return (root, query, criteriaBuilder) -> criteriaBuilder.lower(root.get(fieldName).as(String.class)).in(normalizedValues);
+    }
+
     private Specification<Product> byConditions(List<ProductCondition> conditions) {
         return conditions == null || conditions.isEmpty() ? null : (root, query, criteriaBuilder) -> root.get("productCondition").in(conditions);
     }
@@ -909,6 +1097,10 @@ public class ProductService {
             return existingValue;
         }
         return normalizeNullable(requestedValue);
+    }
+
+    private String normalizeUpper(String value) {
+        return value == null || value.isBlank() ? null : value.trim().toUpperCase(Locale.ROOT);
     }
 
     private Integer resolveDiscountPercent(BigDecimal price, BigDecimal originalPrice, Integer requestedDiscountPercent) {
@@ -1027,5 +1219,56 @@ public class ProductService {
             return true;
         }
         return product.getStores().stream().map(Store::getId).anyMatch(accessibleStoreIds::contains);
+    }
+
+    private Map<String, Object> productSnapshot(Product product) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("title", product.getTitle());
+        snapshot.put("brandId", product.getBrand() != null ? product.getBrand().getId() : null);
+        snapshot.put("brandName", product.getBrand() != null ? product.getBrand().getName() : null);
+        snapshot.put("categoryId", product.getCategory() != null ? product.getCategory().getId() : null);
+        snapshot.put("categoryName", product.getCategory() != null ? product.getCategory().getName() : null);
+        snapshot.put("price", product.getPrice());
+        snapshot.put("originalPrice", product.getOriginalPrice());
+        snapshot.put("discountPercent", product.getDiscountPercent());
+        snapshot.put("stockQuantity", product.getStockQuantity());
+        snapshot.put("hsnCode", product.getHsnCode());
+        snapshot.put("gstRatePercent", product.getGstRatePercent());
+        snapshot.put("taxable", product.isTaxable());
+        snapshot.put("available", product.isAvailable());
+        snapshot.put("productStatus", product.getProductStatus() != null ? product.getProductStatus().name() : null);
+        snapshot.put("productCondition", product.getProductCondition() != null ? product.getProductCondition().name() : null);
+        snapshot.put("sku", product.getSku());
+        snapshot.put("featured", product.isFeatured());
+        snapshot.put("bestSeller", product.getBestSeller());
+        snapshot.put("todayDeal", product.getTodayDeal());
+        snapshot.put("imageCount", product.getImages() == null ? 0 : product.getImages().size());
+        snapshot.put("storeIds", product.getStores() == null
+                ? List.of()
+                : product.getStores().stream().map(Store::getId).sorted().collect(Collectors.toList()));
+        return snapshot;
+    }
+
+    private void diffSnapshots(Map<String, Object> before, Map<String, Object> after,
+                               Map<String, Object> oldDiff, Map<String, Object> newDiff) {
+        if (before == null || after == null) return;
+        List<String> keys = new ArrayList<>(after.keySet());
+        for (String key : keys) {
+            Object oldVal = before.get(key);
+            Object newVal = after.get(key);
+            if (!Objects.equals(oldVal, newVal)) {
+                oldDiff.put(key, oldVal);
+                newDiff.put(key, newVal);
+            }
+        }
+    }
+
+    private String encode(Map<String, Object> snapshot) {
+        if (snapshot == null || snapshot.isEmpty()) return null;
+        try {
+            return AUDIT_MAPPER.writeValueAsString(snapshot);
+        } catch (JsonProcessingException ex) {
+            return snapshot.toString();
+        }
     }
 }

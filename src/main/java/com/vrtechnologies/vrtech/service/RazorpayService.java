@@ -1,15 +1,13 @@
 package com.vrtechnologies.vrtech.service;
 
 import com.vrtechnologies.vrtech.config.RazorpayProperties;
+import com.vrtechnologies.vrtech.dto.response.RazorpaySettingsResponse;
 import com.vrtechnologies.vrtech.exception.BadRequestException;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.HttpStatusCodeException;
-import org.springframework.web.client.RestTemplate;
+import org.json.JSONObject;
+import com.razorpay.Order;
+import com.razorpay.RazorpayClient;
+import com.razorpay.RazorpayException;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -23,7 +21,6 @@ import java.util.Map;
 public class RazorpayService {
 
     private final RazorpayProperties properties;
-    private final RestTemplate restTemplate = new RestTemplate();
 
     public RazorpayService(RazorpayProperties properties) {
         this.properties = properties;
@@ -48,24 +45,16 @@ public class RazorpayService {
         payload.put("receipt", receipt);
         payload.put("notes", notes);
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBasicAuth(properties.getKeyId(), properties.getKeySecret(), StandardCharsets.UTF_8);
-
         try {
-            ResponseEntity<Map> response = restTemplate.exchange(
-                    properties.getApiBaseUrl() + "/orders",
-                    HttpMethod.POST,
-                    new HttpEntity<>(payload, headers),
-                    Map.class
-            );
-            Map<String, Object> body = response.getBody();
+            RazorpayClient client = new RazorpayClient(properties.getKeyId(), properties.getKeySecret());
+            Order gatewayOrder = client.orders.create(new JSONObject(payload));
+            Map<String, Object> body = new LinkedHashMap<>(gatewayOrder.toJson().toMap());
             if (body == null || body.get("id") == null) {
                 throw new BadRequestException("Payment gateway did not return an order id");
             }
             return body;
-        } catch (HttpStatusCodeException ex) {
-            throw new BadRequestException("Failed to create Razorpay order: " + ex.getResponseBodyAsString());
+        } catch (RazorpayException ex) {
+            throw new BadRequestException("Failed to create Razorpay order: " + ex.getMessage());
         } catch (Exception ex) {
             throw new BadRequestException("Failed to connect to Razorpay");
         }
@@ -98,6 +87,19 @@ public class RazorpayService {
 
     public String currency() {
         return properties.getCurrency();
+    }
+
+    public RazorpaySettingsResponse settings() {
+        return RazorpaySettingsResponse.builder()
+                .enabled(properties.isEnabled())
+                .configured(isEnabled())
+                .keyId(properties.getKeyId())
+                .keySecretConfigured(properties.getKeySecret() != null && !properties.getKeySecret().isBlank())
+                .webhookSecretConfigured(properties.getWebhookSecret() != null && !properties.getWebhookSecret().isBlank())
+                .currency(properties.getCurrency())
+                .merchantName(properties.getMerchantName())
+                .apiBaseUrl(properties.getApiBaseUrl())
+                .build();
     }
 
     private long toSubunits(BigDecimal amount) {

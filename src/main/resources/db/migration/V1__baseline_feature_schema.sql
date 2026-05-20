@@ -1,0 +1,2 @@
+-- Baseline marker for Flyway-managed deployments.
+-- Existing installations are still normalized by SchemaCompatibilityConfig.

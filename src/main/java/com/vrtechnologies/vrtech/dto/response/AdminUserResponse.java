@@ -30,6 +30,8 @@ public class AdminUserResponse {
     private LocalDate accessEndDate;
     private LocalTime allowedLoginStartTime;
     private LocalTime allowedLoginEndTime;
+    private List<String> allowedLoginDays;
+    private boolean twoFactorEnabled;
     private LocalDateTime lastLoginAt;
     private Long createdBy;
     private LocalDateTime createdAt;

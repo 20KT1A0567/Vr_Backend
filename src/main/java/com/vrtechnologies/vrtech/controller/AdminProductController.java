@@ -3,14 +3,23 @@ package com.vrtechnologies.vrtech.controller;
 import com.vrtechnologies.vrtech.dto.request.ProductBulkActionRequest;
 import com.vrtechnologies.vrtech.dto.request.ProductRequest;
 import com.vrtechnologies.vrtech.dto.response.ApiResponse;
+import com.vrtechnologies.vrtech.dto.response.AuditLogEntryResponse;
+import com.vrtechnologies.vrtech.dto.response.PageResponse;
 import com.vrtechnologies.vrtech.dto.response.ProductResponse;
+import com.vrtechnologies.vrtech.dto.response.ProductImportResponse;
+import com.vrtechnologies.vrtech.entity.AdminActivityLog;
 import com.vrtechnologies.vrtech.entity.User;
 import com.vrtechnologies.vrtech.entity.enums.Module;
 import com.vrtechnologies.vrtech.entity.enums.PermissionAction;
 import com.vrtechnologies.vrtech.entity.enums.ProductBulkActionType;
+import com.vrtechnologies.vrtech.service.AdminActivityLogService;
 import com.vrtechnologies.vrtech.service.PermissionService;
 import com.vrtechnologies.vrtech.service.ProductService;
+import com.vrtechnologies.vrtech.service.ProductImportExportService;
 import com.vrtechnologies.vrtech.service.UserContextService;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,6 +32,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -34,15 +46,21 @@ public class AdminProductController {
     private final ProductService productService;
     private final PermissionService permissionService;
     private final UserContextService userContextService;
+    private final ProductImportExportService productImportExportService;
+    private final AdminActivityLogService activityLogService;
 
     public AdminProductController(
             ProductService productService,
             PermissionService permissionService,
-            UserContextService userContextService
+            UserContextService userContextService,
+            ProductImportExportService productImportExportService,
+            AdminActivityLogService activityLogService
     ) {
         this.productService = productService;
         this.permissionService = permissionService;
         this.userContextService = userContextService;
+        this.productImportExportService = productImportExportService;
+        this.activityLogService = activityLogService;
     }
 
     @GetMapping
@@ -109,6 +127,23 @@ public class AdminProductController {
         return ApiResponse.ok("Bulk product action completed", null);
     }
 
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> exportProducts() {
+        User admin = currentAdmin();
+        permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.EXPORT);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"products.csv\"")
+                .contentType(MediaType.parseMediaType("text/csv"))
+                .body(productImportExportService.exportCsv(admin));
+    }
+
+    @PostMapping("/import")
+    public ApiResponse<ProductImportResponse> importProducts(@RequestParam("file") MultipartFile file) {
+        User admin = currentAdmin();
+        permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.CREATE);
+        return ApiResponse.ok("Product import completed", productImportExportService.importCsv(file));
+    }
+
     @DeleteMapping("/{id}")
     public ApiResponse<Object> delete(@PathVariable Long id) {
         User admin = currentAdmin();
@@ -136,6 +171,38 @@ public class AdminProductController {
         User admin = currentAdmin();
         permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.UPDATE);
         return ApiResponse.ok("Image deleted", productService.deleteProductImage(admin, id, imageId));
+    }
+
+    @GetMapping("/{id}/audit")
+    public ApiResponse<PageResponse<AuditLogEntryResponse>> auditHistory(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        User admin = currentAdmin();
+        permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.VIEW);
+        // Throws ResourceNotFoundException if missing or not visible to this admin
+        productService.getAdminProduct(admin, id);
+        Pageable pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 100));
+        Page<AdminActivityLog> logs = activityLogService.forEntity("Product", id, pageable);
+        return ApiResponse.ok("Product audit fetched", PageResponse.from(logs.map(this::toAuditResponse)));
+    }
+
+    private AuditLogEntryResponse toAuditResponse(AdminActivityLog entry) {
+        return AuditLogEntryResponse.builder()
+                .id(entry.getId())
+                .adminId(entry.getAdminId())
+                .adminEmail(entry.getAdminEmail())
+                .module(entry.getModule() != null ? entry.getModule().name() : null)
+                .action(entry.getAction() != null ? entry.getAction().name() : null)
+                .entityType(entry.getEntityType())
+                .entityId(entry.getEntityId())
+                .oldValue(entry.getOldValue())
+                .newValue(entry.getNewValue())
+                .description(entry.getDescription())
+                .ipAddress(entry.getIpAddress())
+                .createdAt(entry.getCreatedAt())
+                .build();
     }
 
     private User currentAdmin() {

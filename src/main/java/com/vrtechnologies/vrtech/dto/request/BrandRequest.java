@@ -12,4 +12,12 @@ public class BrandRequest {
     private String name;
 
     private String logoUrl;
+
+    private String description;
+
+    private Integer sortOrder;
+
+    private Integer discountPercent;
+
+    private Boolean active;
 }

@@ -35,6 +35,10 @@ public class EnquiryService {
         enquiry.setName(request.getName());
         enquiry.setPhone(request.getPhone());
         enquiry.setEmail(request.getEmail());
+        enquiry.setEnquiryType(request.getEnquiryType() == null || request.getEnquiryType().isBlank() ? "GENERAL" : request.getEnquiryType().trim().toUpperCase());
+        enquiry.setCompanyName(request.getCompanyName());
+        enquiry.setQuantity(request.getQuantity());
+        enquiry.setBudget(request.getBudget());
         enquiry.setMessage(request.getMessage());
         enquiry.setStatus(EnquiryStatus.NEW);
 

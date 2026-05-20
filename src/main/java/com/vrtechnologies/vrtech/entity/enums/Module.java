@@ -8,6 +8,7 @@ public enum Module {
     STORES,
     BANNERS,
     COUPONS,
+    REVIEWS,
     ORDERS,
     CUSTOMERS,
     INVENTORY,

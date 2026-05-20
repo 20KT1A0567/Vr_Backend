@@ -29,19 +29,31 @@ public class AdminRoleSeedConfig {
             descriptions.put(Role.CONTENT_MANAGER, "Website content and merchandising control.");
             descriptions.put(Role.ACCOUNTANT, "Read-heavy financial and reporting access.");
 
-            for (Map.Entry<Role, String> entry : descriptions.entrySet()) {
-                String roleKey = entry.getKey().name();
-                AdminRole role = adminRoleRepository.findById(roleKey).orElseGet(AdminRole::new);
-                role.setRoleKey(roleKey);
-                role.setDisplayName(formatDisplayName(entry.getKey()));
-                role.setDescription(entry.getValue());
-                role.setBaseRole(entry.getKey());
-                role.setActive(true);
-                role.setSystemRole(true);
-                role.setProtectedRole(true);
-                adminRoleRepository.save(role);
-            }
+            ensureSuperAdminRole(adminRoleRepository, descriptions.get(Role.SUPER_ADMIN));
+
+            descriptions.entrySet().stream()
+                    .filter(entry -> entry.getKey() != Role.SUPER_ADMIN)
+                    .forEach(entry -> adminRoleRepository.findById(entry.getKey().name()).ifPresent(role -> {
+                        role.setDisplayName(formatDisplayName(entry.getKey()));
+                        role.setDescription(entry.getValue());
+                        role.setBaseRole(entry.getKey());
+                        role.setSystemRole(false);
+                        role.setProtectedRole(false);
+                        adminRoleRepository.save(role);
+                    }));
         };
+    }
+
+    private void ensureSuperAdminRole(AdminRoleRepository adminRoleRepository, String description) {
+        AdminRole role = adminRoleRepository.findById(Role.SUPER_ADMIN.name()).orElseGet(AdminRole::new);
+        role.setRoleKey(Role.SUPER_ADMIN.name());
+        role.setDisplayName(formatDisplayName(Role.SUPER_ADMIN));
+        role.setDescription(description);
+        role.setBaseRole(Role.SUPER_ADMIN);
+        role.setActive(true);
+        role.setSystemRole(true);
+        role.setProtectedRole(true);
+        adminRoleRepository.save(role);
     }
 
     private String formatDisplayName(Role role) {

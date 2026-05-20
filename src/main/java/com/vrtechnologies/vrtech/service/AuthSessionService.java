@@ -17,6 +17,8 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Base64;
+import java.util.List;
+import java.util.Objects;
 
 @Service
 public class AuthSessionService {
@@ -70,6 +72,37 @@ public class AuthSessionService {
         applyRequestMeta(session);
         session = authSessionRepository.save(session);
         return new SessionToken(session, nextToken);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AuthSession> listActiveForUser(Long userId) {
+        return authSessionRepository.findActiveByUserId(userId, LocalDateTime.now());
+    }
+
+    @Transactional
+    public void revokeById(Long userId, Long sessionId) {
+        AuthSession session = authSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new BadRequestException("Session not found"));
+        if (!Objects.equals(session.getUserId(), userId)) {
+            throw new BadRequestException("Session does not belong to this user");
+        }
+        if (session.getRevokedAt() != null) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        session.setRevokedAt(now);
+        session.setLogoutAt(now);
+        authSessionRepository.save(session);
+    }
+
+    @Transactional
+    public int revokeAllExcept(Long userId, Long keepSessionId) {
+        return authSessionRepository.revokeAllExcept(userId, keepSessionId == null ? -1L : keepSessionId, LocalDateTime.now());
+    }
+
+    @Transactional
+    public int revokeAllForUser(Long userId) {
+        return authSessionRepository.revokeAllForUser(userId, LocalDateTime.now());
     }
 
     @Transactional

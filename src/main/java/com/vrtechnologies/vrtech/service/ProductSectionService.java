@@ -17,6 +17,7 @@ import com.vrtechnologies.vrtech.exception.ResourceNotFoundException;
 import com.vrtechnologies.vrtech.repository.OrderItemRepository;
 import com.vrtechnologies.vrtech.repository.ProductRepository;
 import com.vrtechnologies.vrtech.repository.ProductSectionRepository;
+import com.vrtechnologies.vrtech.repository.SiteSettingsRepository;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -41,36 +42,31 @@ public class ProductSectionService {
     private final ProductRepository productRepository;
     private final OrderItemRepository orderItemRepository;
     private final ProductService productService;
+    private final SiteSettingsRepository siteSettingsRepository;
 
     public ProductSectionService(
             ProductSectionRepository productSectionRepository,
             ProductRepository productRepository,
             OrderItemRepository orderItemRepository,
-            ProductService productService
+            ProductService productService,
+            SiteSettingsRepository siteSettingsRepository
     ) {
         this.productSectionRepository = productSectionRepository;
         this.productRepository = productRepository;
         this.orderItemRepository = orderItemRepository;
         this.productService = productService;
+        this.siteSettingsRepository = siteSettingsRepository;
     }
 
     @Transactional(readOnly = true)
     public List<HomeSectionResponse> getPublicHomeSections() {
-        return productSectionRepository.findByActiveTrueOrderByDisplayOrderAscIdAsc().stream()
+        List<HomeSectionResponse> configuredSections = productSectionRepository.findByActiveTrueOrderByDisplayOrderAscIdAsc().stream()
                 .filter(this::isSectionActiveNow)
-                .map(section -> HomeSectionResponse.builder()
-                        .id(section.getId())
-                        .title(section.getTitle())
-                        .subtitle(section.getSubtitle())
-                        .sectionType(section.getSectionType())
-                        .displayOrder(section.getDisplayOrder())
-                        .maxProducts(resolveSectionLimit(section.getMaxProducts()))
-                        .startAt(section.getStartAt())
-                        .endAt(section.getEndAt())
-                        .products(resolvePublicProducts(section))
-                        .build())
+                .map(this::toHomeSectionResponse)
                 .filter(section -> !section.getProducts().isEmpty())
                 .toList();
+
+        return mergeConfiguredAndDefaultHomeSections(configuredSections);
     }
 
     @Transactional(readOnly = true)
@@ -163,6 +159,101 @@ public class ProductSectionService {
                 .products(manualProducts)
                 .resolvedProducts(resolvePublicProducts(section))
                 .build();
+    }
+
+    private HomeSectionResponse toHomeSectionResponse(ProductSection section) {
+        return HomeSectionResponse.builder()
+                .id(section.getId())
+                .title(section.getTitle())
+                .subtitle(section.getSubtitle())
+                .sectionType(section.getSectionType())
+                .displayOrder(section.getDisplayOrder())
+                .maxProducts(resolveSectionLimit(section.getMaxProducts()))
+                .startAt(section.getStartAt())
+                .endAt(section.getEndAt())
+                .products(resolvePublicProducts(section))
+                .build();
+    }
+
+    private List<HomeSectionResponse> getDefaultPublicHomeSections(String defaultHomeSectionTypes) {
+        String typesStr = defaultHomeSectionTypes;
+        if (typesStr == null || typesStr.trim().isEmpty()) {
+            typesStr = "TODAYS_DEALS,FEATURED_PRODUCTS,BEST_SELLERS,NEW_ARRIVALS,LOW_PRICE_DEALS";
+        }
+
+        String[] types = typesStr.split(",");
+        List<HomeSectionResponse> sections = new ArrayList<>();
+        int order = 0;
+        for (String typeToken : types) {
+            String trimmed = typeToken.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            try {
+                ProductSectionType sectionType = ProductSectionType.valueOf(trimmed);
+                switch (sectionType) {
+                    case TODAYS_DEALS -> addDefaultHomeSection(sections, ProductSectionType.TODAYS_DEALS, "Today's Deals", order++, productService.getTodaysDeals(DEFAULT_SECTION_LIMIT));
+                    case FEATURED_PRODUCTS -> addDefaultHomeSection(sections, ProductSectionType.FEATURED_PRODUCTS, "Handpicked picks worth spotlighting", order++, productService.getFeaturedProducts(DEFAULT_SECTION_LIMIT));
+                    case BEST_SELLERS -> addDefaultHomeSection(sections, ProductSectionType.BEST_SELLERS, "Our most-loved picks", order++, getBestSellers(DEFAULT_SECTION_LIMIT));
+                    case NEW_ARRIVALS -> addDefaultHomeSection(sections, ProductSectionType.NEW_ARRIVALS, "Fresh arrivals - just in", order++, productService.getNewArrivals(DEFAULT_SECTION_LIMIT));
+                    case LOW_PRICE_DEALS -> addDefaultHomeSection(sections, ProductSectionType.LOW_PRICE_DEALS, "Low Price Deals", order++, getLowPriceDeals(DEFAULT_SECTION_LIMIT));
+                    case TRENDING_PRODUCTS -> addDefaultHomeSection(sections, ProductSectionType.TRENDING_PRODUCTS, "Trending Products", order++, getTrendingProducts(DEFAULT_SECTION_LIMIT));
+                    case TOP_RATED -> addDefaultHomeSection(sections, ProductSectionType.TOP_RATED, "Top Rated", order++, getTopRatedFallback(DEFAULT_SECTION_LIMIT));
+                    case RECOMMENDED_PRODUCTS -> addDefaultHomeSection(sections, ProductSectionType.RECOMMENDED_PRODUCTS, "Recommended Products", order++, getRecommendedProducts(DEFAULT_SECTION_LIMIT));
+                }
+            } catch (IllegalArgumentException e) {
+                // Ignore unknown types
+            }
+        }
+        return sections;
+    }
+
+    private List<HomeSectionResponse> mergeConfiguredAndDefaultHomeSections(List<HomeSectionResponse> configuredSections) {
+        var settingsOpt = siteSettingsRepository.findTopByOrderByIdAsc();
+        boolean includeDefaultSections = settingsOpt
+                .map(settings -> settings.isIncludeDefaultHomeSections())
+                .orElse(true);
+        if (!includeDefaultSections) {
+            return configuredSections;
+        }
+
+        String typesStr = settingsOpt.map(settings -> settings.getDefaultHomeSectionTypes()).orElse(null);
+        List<HomeSectionResponse> defaultSections = getDefaultPublicHomeSections(typesStr);
+        Set<ProductSectionType> configuredTypes = configuredSections.stream()
+                .map(HomeSectionResponse::getSectionType)
+                .collect(LinkedHashSet::new, LinkedHashSet::add, LinkedHashSet::addAll);
+
+        List<HomeSectionResponse> mergedSections = new ArrayList<>(configuredSections);
+        defaultSections.stream()
+                .filter(section -> !configuredTypes.contains(section.getSectionType()))
+                .forEach(mergedSections::add);
+
+        return mergedSections.stream()
+                .sorted(Comparator
+                        .comparing((HomeSectionResponse section) -> section.getDisplayOrder() == null ? 0 : section.getDisplayOrder())
+                        .thenComparing(section -> section.getId() == null ? 0L : section.getId()))
+                .toList();
+    }
+
+    private void addDefaultHomeSection(
+            List<HomeSectionResponse> sections,
+            ProductSectionType sectionType,
+            String title,
+            int displayOrder,
+            List<ProductResponse> products
+    ) {
+        if (products == null || products.isEmpty()) {
+            return;
+        }
+
+        sections.add(HomeSectionResponse.builder()
+                .id((long) -displayOrder - 1)
+                .title(title)
+                .sectionType(sectionType)
+                .displayOrder(displayOrder)
+                .maxProducts(resolveSectionLimit(DEFAULT_SECTION_LIMIT))
+                .products(products.stream().limit(DEFAULT_SECTION_LIMIT).toList())
+                .build());
     }
 
     private List<ProductResponse> resolvePublicProducts(ProductSection section) {

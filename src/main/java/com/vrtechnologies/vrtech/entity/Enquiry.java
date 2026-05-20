@@ -33,6 +33,16 @@ public class Enquiry extends BaseEntity {
 
     private String email;
 
+    @Column(length = 40)
+    private String enquiryType = "GENERAL";
+
+    private String companyName;
+
+    private Integer quantity;
+
+    @Column(precision = 12, scale = 2)
+    private java.math.BigDecimal budget;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_id")
     private Product product;

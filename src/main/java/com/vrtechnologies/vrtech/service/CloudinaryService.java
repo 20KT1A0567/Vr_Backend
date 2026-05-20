@@ -3,6 +3,7 @@ package com.vrtechnologies.vrtech.service;
 import com.cloudinary.Cloudinary;
 import com.vrtechnologies.vrtech.dto.response.MediaUploadResponse;
 import com.vrtechnologies.vrtech.exception.BadRequestException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -14,9 +15,16 @@ import java.util.Map;
 public class CloudinaryService {
 
     private final Cloudinary cloudinary;
+    private final boolean configured;
 
-    public CloudinaryService(Cloudinary cloudinary) {
+    public CloudinaryService(
+            Cloudinary cloudinary,
+            @Value("${cloudinary.cloud-name}") String cloudName,
+            @Value("${cloudinary.api-key}") String apiKey,
+            @Value("${cloudinary.api-secret}") String apiSecret
+    ) {
         this.cloudinary = cloudinary;
+        this.configured = hasText(cloudName) && hasText(apiKey) && hasText(apiSecret);
     }
 
     public MediaUploadResponse uploadImage(MultipartFile file, String folder) {
@@ -32,6 +40,10 @@ public class CloudinaryService {
         return upload(file, folder, "auto", "Media file is required", "Failed to upload media");
     }
 
+    public boolean isConfigured() {
+        return configured;
+    }
+
     public void deleteAsset(String publicId) {
         deleteAsset(publicId, "image");
     }
@@ -42,9 +54,10 @@ public class CloudinaryService {
             return;
         }
 
+        ensureConfigured();
         try {
             cloudinary.uploader().destroy(publicId, Map.of("resource_type", resolvedResourceType));
-        } catch (IOException exception) {
+        } catch (IOException | RuntimeException exception) {
             throw new BadRequestException("Failed to delete media");
         }
     }
@@ -60,6 +73,7 @@ public class CloudinaryService {
             throw new BadRequestException(emptyMessage);
         }
 
+        ensureConfigured();
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = cloudinary.uploader().upload(
@@ -75,8 +89,18 @@ public class CloudinaryService {
                     .publicId((String) result.get("public_id"))
                     .resourceType((String) result.get("resource_type"))
                     .build();
-        } catch (IOException exception) {
+        } catch (IOException | RuntimeException exception) {
             throw new BadRequestException(failureMessage);
         }
+    }
+
+    private void ensureConfigured() {
+        if (!configured) {
+            throw new BadRequestException("Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.");
+        }
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

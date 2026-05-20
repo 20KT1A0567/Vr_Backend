@@ -1,6 +1,8 @@
 package com.vrtechnologies.vrtech.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import com.vrtechnologies.vrtech.entity.enums.BannerMediaType;
 import com.vrtechnologies.vrtech.entity.enums.BannerPlacement;
 import lombok.Getter;
@@ -38,6 +40,24 @@ public class BannerRequest {
 
     private LocalDateTime endAt;
 
+    @JsonIgnore
+    private boolean startAtProvided;
+
+    @JsonIgnore
+    private boolean endAtProvided;
+
     private Boolean active;
     private Integer sortOrder;
+
+    @JsonSetter("startAt")
+    public void setStartAt(LocalDateTime startAt) {
+        this.startAt = startAt;
+        this.startAtProvided = true;
+    }
+
+    @JsonSetter("endAt")
+    public void setEndAt(LocalDateTime endAt) {
+        this.endAt = endAt;
+        this.endAtProvided = true;
+    }
 }

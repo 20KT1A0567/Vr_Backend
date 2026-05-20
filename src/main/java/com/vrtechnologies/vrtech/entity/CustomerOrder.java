@@ -37,8 +37,11 @@ public class CustomerOrder extends BaseEntity {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id", nullable = false)
+    @JoinColumn(name = "user_id")
     private User user;
+
+    @Column(nullable = false)
+    private boolean guestCheckout = false;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "store_id")
@@ -52,6 +55,21 @@ public class CustomerOrder extends BaseEntity {
 
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
+
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal subtotalAmount = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal discountAmount = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal taxAmount = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal deliveryCharge = BigDecimal.ZERO;
+
+    @Column(length = 80)
+    private String couponCode;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -78,6 +96,9 @@ public class CustomerOrder extends BaseEntity {
     @Column(columnDefinition = "TEXT")
     private String deliveryAddress;
 
+    @Column(length = 80)
+    private String deliveryState;
+
     @Column(columnDefinition = "TEXT")
     private String notes;
 
@@ -87,6 +108,18 @@ public class CustomerOrder extends BaseEntity {
 
     private LocalDateTime cancelledAt;
 
+    @Column(name = "courier_name", length = 80)
+    private String courierName;
+
+    @Column(name = "tracking_number", length = 80)
+    private String trackingNumber;
+
+    @Column(name = "tracking_url", length = 500)
+    private String trackingUrl;
+
+    @Column(name = "shipped_at")
+    private LocalDateTime shippedAt;
+
     @Column(columnDefinition = "TEXT")
     private String cancellationReason;
 
@@ -94,6 +127,9 @@ public class CustomerOrder extends BaseEntity {
 
     @Column(columnDefinition = "TEXT")
     private String returnReason;
+
+    @Column(columnDefinition = "TEXT")
+    private String returnResolutionNote;
 
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("id ASC")

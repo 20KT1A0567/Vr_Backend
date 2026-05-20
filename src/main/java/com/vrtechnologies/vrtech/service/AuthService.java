@@ -6,10 +6,17 @@ import com.google.firebase.auth.FirebaseAuthException;
 import com.google.firebase.auth.FirebaseToken;
 import com.vrtechnologies.vrtech.dto.request.LoginRequest;
 import com.vrtechnologies.vrtech.dto.request.LogoutRequest;
+import com.vrtechnologies.vrtech.dto.request.PhoneSendRequest;
 import com.vrtechnologies.vrtech.dto.request.PhoneVerifyRequest;
 import com.vrtechnologies.vrtech.dto.request.RefreshTokenRequest;
 import com.vrtechnologies.vrtech.dto.request.RegisterRequest;
+import com.vrtechnologies.vrtech.dto.request.TwoFactorBackupRequest;
+import com.vrtechnologies.vrtech.dto.request.TwoFactorResendRequest;
+import com.vrtechnologies.vrtech.dto.request.TwoFactorVerifyRequest;
 import com.vrtechnologies.vrtech.dto.response.AuthResponse;
+import com.vrtechnologies.vrtech.dto.response.LoginOutcome;
+import com.vrtechnologies.vrtech.dto.response.PhoneSendResponse;
+import com.vrtechnologies.vrtech.dto.response.TwoFactorChallengeResponse;
 import com.vrtechnologies.vrtech.entity.User;
 import com.vrtechnologies.vrtech.entity.enums.AdminStatus;
 import com.vrtechnologies.vrtech.entity.enums.Module;
@@ -18,27 +25,39 @@ import com.vrtechnologies.vrtech.entity.enums.Role;
 import com.vrtechnologies.vrtech.exception.BadRequestException;
 import com.vrtechnologies.vrtech.repository.UserRepository;
 import com.vrtechnologies.vrtech.security.JwtService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+    private static final int MAX_ADMIN_FAILED_ATTEMPTS = 5;
+    private static final int ADMIN_LOCK_MINUTES = 30;
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -50,6 +69,11 @@ public class AuthService {
     private final AdminActivityLogService activityLogService;
     private final AuthSessionService authSessionService;
     private final PermissionService permissionService;
+    private final AdminEmailOtpService adminEmailOtpService;
+    private final AdminBackupCodeService backupCodeService;
+
+    @Value("${app.admin.otp.required-roles:SUPER_ADMIN}")
+    private String otpRequiredRolesProperty;
 
     public AuthService(
             UserRepository userRepository,
@@ -61,7 +85,9 @@ public class AuthService {
             AdminLoginHistoryService loginHistoryService,
             AdminActivityLogService activityLogService,
             AuthSessionService authSessionService,
-            PermissionService permissionService
+            PermissionService permissionService,
+            AdminEmailOtpService adminEmailOtpService,
+            AdminBackupCodeService backupCodeService
     ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
@@ -73,6 +99,8 @@ public class AuthService {
         this.activityLogService = activityLogService;
         this.authSessionService = authSessionService;
         this.permissionService = permissionService;
+        this.adminEmailOtpService = adminEmailOtpService;
+        this.backupCodeService = backupCodeService;
     }
 
     public AuthResponse register(RegisterRequest request) {
@@ -94,8 +122,15 @@ public class AuthService {
         return toAuthResponse(user, accessToken, sessionToken);
     }
 
-    public AuthResponse login(LoginRequest request) {
+    public LoginOutcome login(LoginRequest request) {
+        return login(request, null, null);
+    }
+
+    public LoginOutcome login(LoginRequest request, String ipAddress, String userAgent) {
         String email = request.getEmail() == null ? "" : request.getEmail().trim();
+        userRepository.findByEmailIgnoreCase(email)
+                .filter(user -> user.getRole() != Role.USER)
+                .ifPresent(this::ensureAdminNotLocked);
 
         try {
             authenticationManager.authenticate(
@@ -114,29 +149,121 @@ public class AuthService {
 
         ensureUserCanAuthenticate(user);
 
+        if (user.getRole() != Role.USER && requiresTwoFactor(user)) {
+            AdminEmailOtpService.IssuedChallenge challenge = adminEmailOtpService.issueChallenge(user, ipAddress, userAgent);
+            activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
+                    null, null, "Admin 2FA challenge issued: " + user.getEmail());
+            return LoginOutcome.twoFactor(TwoFactorChallengeResponse.builder()
+                    .challengeId(challenge.challengeId())
+                    .maskedEmail(challenge.maskedEmail())
+                    .expiresInSeconds(challenge.expiresInSeconds())
+                    .resendCooldownSeconds(challenge.resendCooldownSeconds())
+                    .message("A verification code has been sent to your email.")
+                    .build());
+        }
+
+        return LoginOutcome.authenticated(finalizeAdminLogin(user));
+    }
+
+    public AuthResponse verifyTwoFactor(TwoFactorVerifyRequest request) {
+        Long userId = adminEmailOtpService.verify(request.getChallengeId(), request.getCode());
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BadRequestException("Account not found"));
+        ensureUserCanAuthenticate(user);
+        return finalizeAdminLogin(user);
+    }
+
+    public AuthResponse verifyBackupCode(TwoFactorBackupRequest request, String ipAddress) {
+        Long userId = adminEmailOtpService.peekUserId(request.getChallengeId());
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BadRequestException("Verification session expired. Please sign in again."));
+
+        boolean ok = backupCodeService.redeem(user.getId(), request.getBackupCode(), ipAddress);
+        if (!ok) {
+            activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
+                    null, null, "Invalid backup code attempt: " + user.getEmail());
+            throw new BadRequestException("Invalid or already-used backup code.");
+        }
+
+        adminEmailOtpService.invalidateChallenge(request.getChallengeId());
+        ensureUserCanAuthenticate(user);
+        activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
+                null, null, "Admin login via backup code: " + user.getEmail());
+        return finalizeAdminLogin(user);
+    }
+
+    public TwoFactorChallengeResponse resendTwoFactor(TwoFactorResendRequest request) {
+        Long userId = adminEmailOtpService.peekUserId(request.getChallengeId());
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BadRequestException("Verification session expired. Please sign in again."));
+        AdminEmailOtpService.IssuedChallenge challenge = adminEmailOtpService.resend(request.getChallengeId(), user);
+        return TwoFactorChallengeResponse.builder()
+                .challengeId(challenge.challengeId())
+                .maskedEmail(challenge.maskedEmail())
+                .expiresInSeconds(challenge.expiresInSeconds())
+                .resendCooldownSeconds(challenge.resendCooldownSeconds())
+                .message("A new verification code has been sent.")
+                .build();
+    }
+
+    private AuthResponse finalizeAdminLogin(User user) {
         AuthSessionService.SessionToken sessionToken = authSessionService.createSession(user);
         if (user.getRole() != Role.USER) {
             user.setLastLoginAt(LocalDateTime.now());
+            user.setFailedLoginAttempts(0);
+            user.setLockedUntil(null);
             user = userRepository.save(user);
             loginHistoryService.recordSuccess(user, sessionToken.session().getId());
             activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
                     null, null, "Admin login: " + user.getEmail());
         }
-
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String accessToken = jwtService.generateAccessToken(userDetails);
+        String accessToken = jwtService.generateAccessToken(userDetails, sessionToken.session().getId());
         return toAuthResponse(user, accessToken, sessionToken);
     }
 
+    private boolean requiresTwoFactor(User user) {
+        if (user.isTwoFactorEnabled()) {
+            return true;
+        }
+        Set<String> required = parseRequiredOtpRoles();
+        if (required.contains("ALL")) {
+            return user.getRole() != Role.USER;
+        }
+        return required.contains(user.getRole().name());
+    }
+
+    private Set<String> parseRequiredOtpRoles() {
+        Set<String> result = new HashSet<>();
+        if (otpRequiredRolesProperty == null || otpRequiredRolesProperty.isBlank()) {
+            return result;
+        }
+        Arrays.stream(otpRequiredRolesProperty.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.toUpperCase(Locale.ROOT))
+                .forEach(result::add);
+        return result;
+    }
+
     public AuthResponse verifyPhone(PhoneVerifyRequest request) {
+        return firebaseCustomerLogin(request.getIdToken(), request.getSessionInfo());
+    }
+
+    public AuthResponse firebaseCustomerLogin(String firebaseIdToken) {
+        return firebaseCustomerLogin(firebaseIdToken, null);
+    }
+
+    private AuthResponse firebaseCustomerLogin(String firebaseIdToken, String sessionInfo) {
         if (FirebaseApp.getApps().isEmpty()) {
             throw new BadRequestException("Phone login is not configured on this server");
         }
 
         FirebaseToken decoded;
         try {
-            decoded = FirebaseAuth.getInstance().verifyIdToken(request.getIdToken());
+            decoded = FirebaseAuth.getInstance().verifyIdToken(firebaseIdToken);
         } catch (FirebaseAuthException ex) {
+            log.warn("Firebase phone token verification failed: {}. SessionInfo: {}", ex.getMessage(), sessionInfo);
             throw new BadRequestException("Invalid OTP token");
         }
 
@@ -163,11 +290,22 @@ public class AuthService {
         return toAuthResponse(user, accessToken, sessionToken);
     }
 
+    public PhoneSendResponse sendPhoneOtp(PhoneSendRequest request) {
+        log.info("Registering Firebase OTP attempt for {}", request.getPhone());
+        // The actual SMS is sent by Firebase Web SDK in the browser. This endpoint
+        // keeps the website/backend auth flow aligned and gives us an audit point.
+        return PhoneSendResponse.builder()
+                .verificationId("internal-" + generateRandomSecret().substring(0, 8))
+                .sessionInfo("firebase-session-placeholder")
+                .token("placeholder-token")
+                .build();
+    }
+
     private User createPhoneUser(String phone) {
         User user = new User();
         user.setPhone(phone);
         user.setName("Customer");
-        user.setEmail(phone + "@phone.anushabazaar.local");
+        user.setEmail(phone);
         user.setPassword(passwordEncoder.encode(generateRandomSecret()));
         user.setRole(Role.USER);
         user.setActive(true);
@@ -175,6 +313,7 @@ public class AuthService {
     }
 
     private String generateRandomSecret() {
+
         byte[] bytes = new byte[32];
         new SecureRandom().nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
@@ -187,7 +326,7 @@ public class AuthService {
         ensureUserCanAuthenticate(user);
         AuthSessionService.SessionToken rotatedSession = authSessionService.rotateSession(request.getRefreshToken());
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String accessToken = jwtService.generateAccessToken(userDetails);
+        String accessToken = jwtService.generateAccessToken(userDetails, rotatedSession.session().getId());
         return toAuthResponse(user, accessToken, rotatedSession);
     }
 
@@ -218,6 +357,7 @@ public class AuthService {
     }
 
     private void enforceAdminLoginRules(User user) {
+        ensureAdminNotLocked(user);
         AdminStatus status = user.effectiveAdminStatus();
         if (status == AdminStatus.DISABLED || !user.isActive()) {
             recordAdminFailure(user, "Account disabled");
@@ -256,9 +396,47 @@ public class AuthService {
                         + start + " and " + end);
             }
         }
+
+        EnumSet<DayOfWeek> allowedDays = user.allowedLoginDaysSet();
+        if (!allowedDays.isEmpty()) {
+            DayOfWeek currentDay = LocalDate.now().getDayOfWeek();
+            if (!allowedDays.contains(currentDay)) {
+                recordAdminFailure(user, "Login not allowed on " + currentDay);
+                throw new BadRequestException("Login is not allowed on " + formatDay(currentDay)
+                        + ". Allowed days: " + formatDays(allowedDays));
+            }
+        }
+    }
+
+    private String formatDay(DayOfWeek day) {
+        String name = day.name();
+        return name.charAt(0) + name.substring(1).toLowerCase(Locale.ROOT);
+    }
+
+    private String formatDays(EnumSet<DayOfWeek> days) {
+        StringBuilder sb = new StringBuilder();
+        for (DayOfWeek d : days) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(formatDay(d));
+        }
+        return sb.toString();
+    }
+
+    private void ensureAdminNotLocked(User user) {
+        if (user.getLockedUntil() == null) {
+            return;
+        }
+        if (LocalDateTime.now().isBefore(user.getLockedUntil())) {
+            loginHistoryService.recordFailure(user.getEmail(), "Account locked after failed attempts");
+            throw new BadRequestException("Too many failed login attempts. Try again after " + user.getLockedUntil());
+        }
+        user.setFailedLoginAttempts(0);
+        user.setLockedUntil(null);
+        userRepository.save(user);
     }
 
     private void recordAdminFailure(User user, String reason) {
+        registerFailedAdminAttempt(user);
         loginHistoryService.recordFailure(user.getEmail(), reason);
         activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
                 null, null, "Admin login failure: " + reason);
@@ -270,9 +448,19 @@ public class AuthService {
         }
         userRepository.findByEmailIgnoreCase(email).ifPresent(user -> {
             if (user.getRole() != Role.USER) {
+                registerFailedAdminAttempt(user);
                 loginHistoryService.recordFailure(email, reason);
             }
         });
+    }
+
+    private void registerFailedAdminAttempt(User user) {
+        int attempts = user.getFailedLoginAttempts() + 1;
+        user.setFailedLoginAttempts(attempts);
+        if (attempts >= MAX_ADMIN_FAILED_ATTEMPTS) {
+            user.setLockedUntil(LocalDateTime.now().plusMinutes(ADMIN_LOCK_MINUTES));
+        }
+        userRepository.save(user);
     }
 
     private AuthResponse toAuthResponse(User user, String accessToken, AuthSessionService.SessionToken sessionToken) {
@@ -281,7 +469,7 @@ public class AuthService {
                 .refreshToken(sessionToken != null ? sessionToken.refreshToken() : null)
                 .id(user.getId())
                 .name(user.getName())
-                .email(user.getEmail())
+                .email(publicEmail(user))
                 .phone(user.getPhone())
                 .role(user.getRole())
                 .sessionId(sessionToken != null ? sessionToken.session().getId() : null)
@@ -316,5 +504,21 @@ public class AuthService {
         }
 
         return builder.build();
+    }
+
+    private String publicEmail(User user) {
+        if (user == null || user.getEmail() == null) {
+            return null;
+        }
+        if (user.getRole() == Role.USER && isInternalPhoneLoginEmail(user)) {
+            return null;
+        }
+        return user.getEmail();
+    }
+
+    private boolean isInternalPhoneLoginEmail(User user) {
+        String email = user.getEmail().toLowerCase(Locale.ROOT);
+        String phone = user.getPhone() == null ? "" : user.getPhone().toLowerCase(Locale.ROOT);
+        return email.endsWith("@phone.anushabazaar.local") || (!phone.isBlank() && email.equals(phone));
     }
 }

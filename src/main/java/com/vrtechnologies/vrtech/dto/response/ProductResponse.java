@@ -57,10 +57,14 @@ public class ProductResponse {
     private String seoTitle;
     private String seoDescription;
     private String seoKeywords;
+    private String hsnCode;
+    private BigDecimal gstRatePercent;
+    private boolean taxable;
     private Integer lowStockThreshold;
     private String description;
     private Map<String, Object> customAttributes;
     private List<StoreSummaryResponse> stores;
+    private List<StoreAvailabilityResponse> storeAvailability;
     private List<ProductImageResponse> images;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

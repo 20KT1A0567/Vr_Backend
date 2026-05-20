@@ -3,10 +3,14 @@ package com.vrtechnologies.vrtech.controller;
 import com.vrtechnologies.vrtech.dto.request.OrderActionRequest;
 import com.vrtechnologies.vrtech.dto.request.OrderRequest;
 import com.vrtechnologies.vrtech.dto.request.PaymentVerificationRequest;
+import com.vrtechnologies.vrtech.dto.request.CourierWebhookRequest;
 import com.vrtechnologies.vrtech.dto.response.ApiResponse;
+import com.vrtechnologies.vrtech.dto.response.CheckoutProfileResponse;
 import com.vrtechnologies.vrtech.dto.response.OrderResponse;
+import com.vrtechnologies.vrtech.dto.response.OrderTimelineEventResponse;
 import com.vrtechnologies.vrtech.dto.response.PaymentCheckoutSessionResponse;
 import com.vrtechnologies.vrtech.service.OrderService;
+import com.vrtechnologies.vrtech.service.ReturnRequestService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -17,6 +21,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
 
@@ -24,9 +29,11 @@ import java.util.List;
 public class OrderController {
 
     private final OrderService orderService;
+    private final ReturnRequestService returnRequestService;
 
-    public OrderController(OrderService orderService) {
+    public OrderController(OrderService orderService, ReturnRequestService returnRequestService) {
         this.orderService = orderService;
+        this.returnRequestService = returnRequestService;
     }
 
     @PostMapping("/api/orders/place")
@@ -34,14 +41,39 @@ public class OrderController {
         return ApiResponse.ok("Order placed", orderService.placeOrder(request));
     }
 
+    @PostMapping("/api/orders/guest")
+    public ApiResponse<OrderResponse> placeGuestOrder(@Valid @RequestBody OrderRequest request) {
+        return ApiResponse.ok("Guest order placed", orderService.placeGuestOrder(request));
+    }
+
+    @PostMapping("/api/courier/webhooks/status")
+    public ApiResponse<OrderResponse> courierWebhook(@RequestBody CourierWebhookRequest request) {
+        return ApiResponse.ok("Courier status processed", orderService.handleCourierWebhook(request));
+    }
+
     @GetMapping("/api/users/orders")
     public ApiResponse<List<OrderResponse>> getMyOrders() {
         return ApiResponse.ok("Orders fetched", orderService.getMyOrders());
     }
 
+    @GetMapping("/api/users/checkout-profile")
+    public ApiResponse<CheckoutProfileResponse> getCheckoutProfile() {
+        return ApiResponse.ok("Checkout profile fetched", orderService.getCheckoutProfile());
+    }
+
     @GetMapping("/api/users/orders/{id}")
     public ApiResponse<OrderResponse> getMyOrder(@PathVariable Long id) {
         return ApiResponse.ok("Order fetched", orderService.getMyOrder(id));
+    }
+
+    @GetMapping("/api/public/orders/track")
+    public ApiResponse<OrderResponse> trackOrder(@RequestParam String orderNumber, @RequestParam String phone) {
+        return ApiResponse.ok("Order tracked", orderService.trackPublicOrder(orderNumber, phone));
+    }
+
+    @GetMapping("/api/users/orders/{id}/timeline")
+    public ApiResponse<List<OrderTimelineEventResponse>> getMyOrderTimeline(@PathVariable Long id) {
+        return ApiResponse.ok("Order timeline fetched", orderService.getMyOrder(id).getTimeline());
     }
 
     @PostMapping("/api/users/orders/{id}/payment-order")
@@ -61,16 +93,15 @@ public class OrderController {
 
     @PatchMapping("/api/users/orders/{id}/return-request")
     public ApiResponse<OrderResponse> requestReturn(@PathVariable Long id, @Valid @RequestBody OrderActionRequest request) {
-        return ApiResponse.ok("Return requested", orderService.requestReturn(id, request.getReason()));
+        return ApiResponse.ok("Return requested", orderService.getMyOrder(returnRequestService.requestReturn(id, request.getReason()).getOrderId()));
     }
 
-    @GetMapping(value = "/api/users/orders/{id}/invoice", produces = MediaType.TEXT_HTML_VALUE)
-    public ResponseEntity<String> downloadInvoice(@PathVariable Long id) {
+    @GetMapping(value = "/api/users/orders/{id}/invoice", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> downloadInvoice(@PathVariable Long id) {
         OrderResponse order = orderService.getMyOrder(id);
-        String html = orderService.generateInvoiceHtmlForUser(id);
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + order.getInvoiceNumber() + ".html\"")
-                .contentType(MediaType.TEXT_HTML)
-                .body(html);
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + order.getInvoiceNumber() + ".pdf\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(orderService.generateInvoicePdfForUser(id));
     }
 }

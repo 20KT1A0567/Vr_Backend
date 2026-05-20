@@ -78,6 +78,9 @@ public class ProductRequest {
     private String seoTitle;
     private String seoDescription;
     private String seoKeywords;
+    private String hsnCode;
+    private BigDecimal gstRatePercent;
+    private Boolean taxable;
     private Integer lowStockThreshold;
     private String description;
     private Map<String, Object> customAttributes;

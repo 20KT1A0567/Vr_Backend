@@ -18,6 +18,7 @@ import com.vrtechnologies.vrtech.repository.OrderItemRepository;
 import com.vrtechnologies.vrtech.repository.ProductRepository;
 import com.vrtechnologies.vrtech.repository.ProductSectionRepository;
 import com.vrtechnologies.vrtech.repository.SiteSettingsRepository;
+import jakarta.persistence.EntityManager;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -43,19 +44,22 @@ public class ProductSectionService {
     private final OrderItemRepository orderItemRepository;
     private final ProductService productService;
     private final SiteSettingsRepository siteSettingsRepository;
+    private final EntityManager entityManager;
 
     public ProductSectionService(
             ProductSectionRepository productSectionRepository,
             ProductRepository productRepository,
             OrderItemRepository orderItemRepository,
             ProductService productService,
-            SiteSettingsRepository siteSettingsRepository
+            SiteSettingsRepository siteSettingsRepository,
+            EntityManager entityManager
     ) {
         this.productSectionRepository = productSectionRepository;
         this.productRepository = productRepository;
         this.orderItemRepository = orderItemRepository;
         this.productService = productService;
         this.siteSettingsRepository = siteSettingsRepository;
+        this.entityManager = entityManager;
     }
 
     @Transactional(readOnly = true)
@@ -365,7 +369,11 @@ public class ProductSectionService {
     }
 
     private void syncSectionProducts(ProductSection section, List<ProductSectionItemRequest> requests) {
+        boolean hadExistingProducts = section.getId() != null && !section.getProducts().isEmpty();
         section.getProducts().clear();
+        if (hadExistingProducts) {
+            entityManager.flush();
+        }
         if (requests == null || requests.isEmpty()) {
             return;
         }

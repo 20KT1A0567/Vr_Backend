@@ -42,6 +42,7 @@ import com.vrtechnologies.vrtech.repository.UserRepository;
 import com.vrtechnologies.vrtech.repository.WishlistItemRepository;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -110,6 +111,7 @@ public class AdminService {
         return getDashboardStats(admin, "ALL_TIME");
     }
 
+    @Transactional(readOnly = true)
     public DashboardStatsResponse getDashboardStats(User admin, String period) {
         List<Long> accessibleStoreIds = permissionService.accessibleStoreIds(admin);
         List<CustomerOrder> scopedOrders = customerOrderRepository.findAll().stream()
@@ -120,7 +122,7 @@ public class AdminService {
                 .toList();
         List<Product> products = productRepository.findAll().stream()
                 .filter(product -> accessibleStoreIds.isEmpty()
-                        || product.getStores().stream().map(Store::getId).anyMatch(accessibleStoreIds::contains))
+                        || hasStoreAccess(product, accessibleStoreIds))
                 .toList();
         List<Store> stores = storeRepository.findAllByOrderByCityAscNameAsc().stream()
                 .filter(store -> accessibleStoreIds.isEmpty() || accessibleStoreIds.contains(store.getId()))
@@ -128,11 +130,11 @@ public class AdminService {
         List<com.vrtechnologies.vrtech.entity.Enquiry> enquiries = enquiryRepository.findAll().stream()
                 .filter(enquiry -> accessibleStoreIds.isEmpty()
                         || (enquiry.getProduct() != null
-                        && enquiry.getProduct().getStores().stream().map(Store::getId).anyMatch(accessibleStoreIds::contains)))
+                        && hasStoreAccess(enquiry.getProduct(), accessibleStoreIds)))
                 .toList();
 
         BigDecimal totalRevenue = orders.stream()
-                .filter(order -> order.getStatus() == OrderStatus.DELIVERED && order.getPaymentStatus() != com.vrtechnologies.vrtech.entity.enums.PaymentStatus.REFUNDED)
+                .filter(this::isRevenueOrder)
                 .map(order -> order.getTotalAmount() == null ? BigDecimal.ZERO : order.getTotalAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -152,7 +154,7 @@ public class AdminService {
                 .distinct()
                 .count();
         long pendingOrders = orders.stream()
-                .filter(order -> switch (order.getStatus()) {
+                .filter(order -> switch (safeOrderStatus(order)) {
                     case PENDING, CONFIRMED, PACKED, SHIPPED, READY -> true;
                     default -> false;
                 })
@@ -454,7 +456,8 @@ public class AdminService {
         }
 
         for (CustomerOrder order : orders) {
-            counts.computeIfPresent(order.getStatus(), (status, count) -> count + 1);
+            OrderStatus status = safeOrderStatus(order);
+            counts.computeIfPresent(status, (ignored, count) -> count + 1);
         }
 
         double totalOrders = Math.max(orders.size(), 1);
@@ -474,7 +477,7 @@ public class AdminService {
         }
 
         for (Product product : products) {
-            for (Store store : product.getStores()) {
+            for (Store store : productStores(product)) {
                 StoreAccumulator accumulator = storeAccumulators.get(store.getId());
                 if (accumulator != null) {
                     accumulator.productsCount += 1;
@@ -483,7 +486,7 @@ public class AdminService {
         }
 
         for (CustomerOrder order : orders) {
-            if (order.getStore() == null || order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.REFUNDED) {
+            if (order.getStore() == null || isClosedOrder(order)) {
                 continue;
             }
 
@@ -512,15 +515,20 @@ public class AdminService {
     private List<DashboardTopProductResponse> buildTopProducts(List<CustomerOrder> orders) {
         Map<Long, ProductAccumulator> productAccumulators = new HashMap<>();
         for (CustomerOrder order : orders) {
-            if (order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.REFUNDED) {
+            if (isClosedOrder(order)) {
                 continue;
             }
 
             for (OrderItem item : order.getItems()) {
                 Product product = item.getProduct();
+                if (product == null || product.getId() == null) {
+                    continue;
+                }
                 ProductAccumulator accumulator = productAccumulators.computeIfAbsent(product.getId(), ignored -> new ProductAccumulator(product));
-                accumulator.soldQuantity += item.getQuantity();
-                accumulator.revenue = accumulator.revenue.add(item.getPriceAtTime().multiply(BigDecimal.valueOf(item.getQuantity())));
+                int quantity = item.getQuantity() == null ? 0 : item.getQuantity();
+                BigDecimal price = item.getPriceAtTime() == null ? BigDecimal.ZERO : item.getPriceAtTime();
+                accumulator.soldQuantity += quantity;
+                accumulator.revenue = accumulator.revenue.add(price.multiply(BigDecimal.valueOf(quantity)));
             }
         }
 
@@ -539,7 +547,7 @@ public class AdminService {
                         .soldQuantity(accumulator.soldQuantity)
                         .revenue(accumulator.revenue)
                         .stockQuantity(accumulator.product.getStockQuantity())
-                        .storeNames(accumulator.product.getStores().stream().map(Store::getName).sorted().toList())
+                        .storeNames(productStoreNames(accumulator.product))
                         .build())
                 .toList();
     }
@@ -547,21 +555,25 @@ public class AdminService {
     private List<DashboardLowStockResponse> buildLowStockItems(List<Product> products) {
         return products.stream()
                 .filter(product -> product.getStockQuantity() != null && product.getStockQuantity() <= 5)
-                .sorted(Comparator.comparing(Product::getStockQuantity).thenComparing(Product::getTitle))
+                .sorted(Comparator.comparing(Product::getStockQuantity)
+                        .thenComparing(product -> safeString(product.getTitle())))
                 .limit(8)
                 .map(product -> DashboardLowStockResponse.builder()
                         .productId(product.getId())
                         .title(product.getTitle())
                         .stockQuantity(product.getStockQuantity())
                         .available(product.isAvailable())
-                        .storeNames(product.getStores().stream().map(Store::getName).sorted().toList())
+                        .storeNames(productStoreNames(product))
                         .build())
                 .toList();
     }
 
     private List<DashboardRecentOrderResponse> buildRecentOrders(List<CustomerOrder> orders) {
         return orders.stream()
-                .sorted(Comparator.comparing(CustomerOrder::getCreatedAt).reversed())
+                .sorted(Comparator.comparing(
+                        CustomerOrder::getCreatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())
+                ))
                 .limit(6)
                 .map(order -> DashboardRecentOrderResponse.builder()
                         .orderId(order.getId())
@@ -569,7 +581,7 @@ public class AdminService {
                         .contactPhone(order.getContactPhone())
                         .storeName(order.getStore() != null ? order.getStore().getName() : "Unassigned")
                         .amount(order.getTotalAmount())
-                        .status(order.getStatus())
+                        .status(safeOrderStatus(order))
                         .paymentStatus(order.getPaymentStatus())
                         .createdAt(order.getCreatedAt())
                         .build())
@@ -578,7 +590,7 @@ public class AdminService {
 
     private AdminStorePerformanceResponse buildStorePerformance(Store store, List<Product> products, List<CustomerOrder> orders, BigDecimal totalRevenue) {
         List<Product> storeProducts = products.stream()
-                .filter(product -> product.getStores().stream().map(Store::getId).anyMatch(store.getId()::equals))
+                .filter(product -> productStores(product).stream().map(Store::getId).anyMatch(store.getId()::equals))
                 .toList();
         List<CustomerOrder> storeOrders = orders.stream()
                 .filter(order -> order.getStore() != null && store.getId().equals(order.getStore().getId()))
@@ -592,10 +604,10 @@ public class AdminService {
                 .filter(this::isPipelineOrder)
                 .map(order -> order.getTotalAmount() == null ? BigDecimal.ZERO : order.getTotalAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        long deliveredOrders = storeOrders.stream().filter(order -> order.getStatus() == OrderStatus.DELIVERED).count();
-        long cancelledOrders = storeOrders.stream().filter(order -> order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.REFUNDED).count();
+        long deliveredOrders = storeOrders.stream().filter(order -> safeOrderStatus(order) == OrderStatus.DELIVERED).count();
+        long cancelledOrders = storeOrders.stream().filter(this::isClosedOrder).count();
         long unitsSold = storeOrders.stream()
-                .filter(order -> order.getStatus() != OrderStatus.CANCELLED && order.getStatus() != OrderStatus.REFUNDED)
+                .filter(order -> !isClosedOrder(order))
                 .flatMap(order -> order.getItems().stream())
                 .mapToLong(item -> item.getQuantity() == null ? 0 : item.getQuantity())
                 .sum();
@@ -651,12 +663,15 @@ public class AdminService {
     private List<AdminStoreTopProductResponse> buildStoreTopProducts(List<CustomerOrder> orders) {
         Map<Long, ProductAccumulator> productAccumulators = new HashMap<>();
         for (CustomerOrder order : orders) {
-            if (order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.REFUNDED) {
+            if (isClosedOrder(order)) {
                 continue;
             }
 
             for (OrderItem item : order.getItems()) {
                 Product product = item.getProduct();
+                if (product == null || product.getId() == null) {
+                    continue;
+                }
                 ProductAccumulator accumulator = productAccumulators.computeIfAbsent(product.getId(), ignored -> new ProductAccumulator(product));
                 accumulator.soldQuantity += item.getQuantity() == null ? 0 : item.getQuantity();
                 BigDecimal lineRevenue = item.getPriceAtTime() == null
@@ -687,15 +702,46 @@ public class AdminService {
     }
 
     private boolean isRevenueOrder(CustomerOrder order) {
-        return order.getStatus() == OrderStatus.DELIVERED
+        return safeOrderStatus(order) == OrderStatus.DELIVERED
                 && order.getPaymentStatus() != com.vrtechnologies.vrtech.entity.enums.PaymentStatus.REFUNDED;
     }
 
     private boolean isPipelineOrder(CustomerOrder order) {
-        return switch (order.getStatus()) {
+        return switch (safeOrderStatus(order)) {
             case PENDING, CONFIRMED, PACKED, SHIPPED, READY, RETURN_REQUESTED -> true;
             default -> false;
         };
+    }
+
+    private boolean isClosedOrder(CustomerOrder order) {
+        OrderStatus status = safeOrderStatus(order);
+        return status == OrderStatus.CANCELLED || status == OrderStatus.REFUNDED;
+    }
+
+    private OrderStatus safeOrderStatus(CustomerOrder order) {
+        return order.getStatus() == null ? OrderStatus.PENDING : order.getStatus();
+    }
+
+    private boolean hasStoreAccess(Product product, List<Long> accessibleStoreIds) {
+        return productStores(product).stream()
+                .map(Store::getId)
+                .anyMatch(accessibleStoreIds::contains);
+    }
+
+    private List<String> productStoreNames(Product product) {
+        return productStores(product).stream()
+                .map(Store::getName)
+                .filter(Objects::nonNull)
+                .sorted()
+                .toList();
+    }
+
+    private Set<Store> productStores(Product product) {
+        return product.getStores() == null ? Set.of() : product.getStores();
+    }
+
+    private String safeString(String value) {
+        return value == null ? "" : value;
     }
 
     private double roundPercentage(double value) {

@@ -24,10 +24,12 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 
 @Service
 public class CatalogService {
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Kolkata");
 
     private final BrandRepository brandRepository;
     private final CategoryRepository categoryRepository;
@@ -84,10 +86,11 @@ public class CatalogService {
     }
 
     public List<BannerResponse> getBanners(boolean includeInactive, BannerPlacement placement) {
+        LocalDateTime now = LocalDateTime.now(BUSINESS_ZONE);
         return bannerRepository.findAllByOrderBySortOrderAscIdDesc().stream()
                 .filter(banner -> placement == null || banner.getEffectivePlacement() == placement)
-                .filter(banner -> includeInactive || isBannerActiveNow(banner, LocalDateTime.now()))
-                .map(this::toBannerResponse)
+                .filter(banner -> includeInactive || isBannerActiveNow(banner, now))
+                .map(banner -> toBannerResponse(banner, now))
                 .toList();
     }
 
@@ -228,6 +231,10 @@ public class CatalogService {
     }
 
     private BannerResponse toBannerResponse(Banner banner) {
+        return toBannerResponse(banner, LocalDateTime.now(BUSINESS_ZONE));
+    }
+
+    private BannerResponse toBannerResponse(Banner banner, LocalDateTime now) {
         return BannerResponse.builder()
                 .id(banner.getId())
                 .title(banner.getTitle())
@@ -241,7 +248,7 @@ public class CatalogService {
                 .linkUrl(banner.getLinkUrl())
                 .placement(banner.getEffectivePlacement())
                 .active(banner.isActive())
-                .activeNow(isBannerActiveNow(banner, LocalDateTime.now()))
+                .activeNow(isBannerActiveNow(banner, now))
                 .sortOrder(banner.getSortOrder())
                 .startAt(banner.getStartAt())
                 .endAt(banner.getEndAt())

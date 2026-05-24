@@ -809,6 +809,22 @@ public class ProductService {
             return normalizedItems.isEmpty() ? null : normalizedItems;
         }
 
+        if (value instanceof Map<?, ?> mapValue) {
+            Map<String, Object> normalizedMap = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : mapValue.entrySet()) {
+                String nestedKey = entry.getKey() == null ? "" : String.valueOf(entry.getKey()).trim();
+                if (nestedKey.isEmpty()) {
+                    continue;
+                }
+
+                Object nestedValue = normalizeCustomAttributeValue(entry.getValue());
+                if (nestedValue != null) {
+                    normalizedMap.put(nestedKey, nestedValue);
+                }
+            }
+            return normalizedMap.isEmpty() ? null : normalizedMap;
+        }
+
         return value;
     }
 

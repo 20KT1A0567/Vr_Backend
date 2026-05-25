@@ -142,7 +142,7 @@ public class PincodeDeliveryService {
                     Long storeId = parseLong(cell(cells, headerIndex, "storeid"));
                     Optional<PincodeDeliveryRule> existing = storeId == null
                             ? pincodeDeliveryRuleRepository.findFirstByPincodeAndStoreIsNullOrderByIdAsc(normalizePincode(pincode))
-                            : pincodeDeliveryRuleRepository.findFirstByPincodeAndStoreIdOrderByIdAsc(normalizePincode(pincode), storeId);
+                            : pincodeDeliveryRuleRepository.findFirstByPincodeAndStore_IdOrderByIdAsc(normalizePincode(pincode), storeId);
 
                     PincodeDeliveryRuleRequest request = new PincodeDeliveryRuleRequest();
                     request.setPincode(pincode);

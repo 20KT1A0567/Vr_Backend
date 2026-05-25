@@ -9,6 +9,6 @@ import java.util.Optional;
 public interface PincodeDeliveryRuleRepository extends JpaRepository<PincodeDeliveryRule, Long> {
     List<PincodeDeliveryRule> findAllByOrderByPincodeAscPriorityAscIdAsc();
     List<PincodeDeliveryRule> findByPincodeAndActiveTrueOrderByPriorityAscIdAsc(String pincode);
-    Optional<PincodeDeliveryRule> findFirstByPincodeAndStoreIdOrderByIdAsc(String pincode, Long storeId);
+    Optional<PincodeDeliveryRule> findFirstByPincodeAndStore_IdOrderByIdAsc(String pincode, Long storeId);
     Optional<PincodeDeliveryRule> findFirstByPincodeAndStoreIsNullOrderByIdAsc(String pincode);
 }

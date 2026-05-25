@@ -25,6 +25,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import java.security.cert.X509Certificate;
+import java.net.HttpURLConnection;
+import java.io.IOException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -211,11 +219,18 @@ public class PincodeDeliveryService {
         String normalizedPincode = normalizePincode(pincode);
         DeliveryResolution resolution = resolveDelivery(settings, normalizedPincode, deliveryState, subtotal, storeId, Boolean.TRUE.equals(codRequested));
 
-        // Find location info
-        PincodeLocation loc = null;
-        try {
-            loc = resolveLocation(normalizedPincode);
-        } catch (Exception ignored) {}
+        // Find location info (using the resolved location from delivery resolution to avoid calling resolveLocation twice)
+        PincodeLocation loc = resolution.getLocation();
+        if (loc == null) {
+            try {
+                // If it was skipped by prefix match, only check local cache to avoid external API calls
+                Optional<PincodeApiCache> cached = pincodeApiCacheRepository.findById(normalizedPincode);
+                if (cached.isPresent()) {
+                    PincodeApiCache cache = cached.get();
+                    loc = new PincodeLocation(normalizedPincode, cache.getStateName(), cache.getDistrictName(), cache.getCityName());
+                }
+            } catch (Exception ignored) {}
+        }
 
         String stateName = loc != null ? loc.getStateName() : null;
         String districtName = loc != null ? loc.getDistrictName() : null;
@@ -298,29 +313,59 @@ public class PincodeDeliveryService {
             return fromRule(best, safeSubtotal, codRequested, settings);
         }
 
-        // 3. Location Lookup (Cache or India Post API)
-        PincodeLocation location = resolveLocation(normalizedPincode);
-
-        // 4. Zone Check
-        if (location != null) {
-            List<PincodeZone> zones = pincodeZoneRepository.findByActiveTrueOrderByPriorityAscIdAsc();
-            for (PincodeZone zone : zones) {
-                if (matchesZone(zone, location)) {
-                    return fromZone(zone, safeSubtotal, codRequested, settings);
+        // 3. Prefix Zone Check (No API Dependency)
+        List<PincodeZone> zones = pincodeZoneRepository.findByActiveTrueOrderByPriorityAscIdAsc();
+        PincodeZone matchedPrefixZone = null;
+        for (PincodeZone zone : zones) {
+            if ("PINCODE_PREFIX".equalsIgnoreCase(zone.getMatchType())) {
+                if (normalizedPincode.startsWith(zone.getMatchValue().trim())) {
+                    matchedPrefixZone = zone;
+                    break;
                 }
             }
         }
 
-        // 5. Fallback Check (State settings)
+        if (matchedPrefixZone != null) {
+            DeliveryResolution resolution = fromZone(matchedPrefixZone, safeSubtotal, codRequested, settings);
+            // Attach location info if already in local cache
+            try {
+                Optional<PincodeApiCache> cached = pincodeApiCacheRepository.findById(normalizedPincode);
+                if (cached.isPresent()) {
+                    PincodeApiCache cache = cached.get();
+                    resolution.setLocation(new PincodeLocation(normalizedPincode, cache.getStateName(), cache.getDistrictName(), cache.getCityName()));
+                }
+            } catch (Exception ignored) {}
+            return resolution;
+        }
+
+        // 4. Location Lookup (Cache or India Post API) - only if no prefix match
+        PincodeLocation location = resolveLocation(normalizedPincode);
+
+        // 5. State / District Zone Check
+        for (PincodeZone zone : zones) {
+            if (!"PINCODE_PREFIX".equalsIgnoreCase(zone.getMatchType()) && location != null) {
+                if (matchesZone(zone, location)) {
+                    DeliveryResolution resolution = fromZone(zone, safeSubtotal, codRequested, settings);
+                    resolution.setLocation(location);
+                    return resolution;
+                }
+            }
+        }
+
+        // 6. Fallback Check (State settings)
         String fallbackState = deliveryState;
         if (location != null && location.getStateName() != null) {
             fallbackState = location.getStateName();
         }
         if (settings != null && fallbackState != null && !fallbackState.isBlank()) {
-            return fromStateFallback(settings, safeSubtotal, fallbackState);
+            DeliveryResolution resolution = fromStateFallback(settings, safeSubtotal, fallbackState);
+            resolution.setLocation(location);
+            return resolution;
         }
 
-        return DeliveryResolution.unserviceable("PINCODE", "This pincode is not serviceable yet");
+        DeliveryResolution resolution = DeliveryResolution.unserviceable("PINCODE", "This pincode is not serviceable yet");
+        resolution.setLocation(location);
+        return resolution;
     }
 
     private LocalDate addBusinessDays(LocalDate baseDate, int daysToAdd) {
@@ -387,7 +432,7 @@ public class PincodeDeliveryService {
                 return new PincodeLocation(cache.getPincode(), cache.getStateName(), cache.getDistrictName(), cache.getCityName());
             }
 
-            RestTemplate restTemplate = new RestTemplate();
+            RestTemplate restTemplate = createSslIgnoringRestTemplate();
             String url = "https://api.postalpincode.in/pincode/" + pincode;
             PostOfficeResponse[] responses = restTemplate.getForObject(url, PostOfficeResponse[].class);
 
@@ -419,6 +464,33 @@ public class PincodeDeliveryService {
                     .warn("PostOffice API error for pincode {}: {}", pincode, exception.getMessage());
         }
         return null;
+    }
+
+    private RestTemplate createSslIgnoringRestTemplate() {
+        try {
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, new TrustManager[]{new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() { return null; }
+                public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+            }}, new java.security.SecureRandom());
+
+            SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory() {
+                @Override
+                protected void prepareConnection(HttpURLConnection connection, String httpMethod) throws IOException {
+                    if (connection instanceof HttpsURLConnection) {
+                        ((HttpsURLConnection) connection).setSSLSocketFactory(sslContext.getSocketFactory());
+                        ((HttpsURLConnection) connection).setHostnameVerifier((hostname, session) -> true);
+                    }
+                    super.prepareConnection(connection, httpMethod);
+                }
+            };
+            requestFactory.setConnectTimeout(1000); // 1.0s connect timeout
+            requestFactory.setReadTimeout(1500);    // 1.5s read timeout
+            return new RestTemplate(requestFactory);
+        } catch (Exception e) {
+            return new RestTemplate();
+        }
     }
 
     public static class PincodeLocation {
@@ -833,6 +905,15 @@ public class PincodeDeliveryService {
         private Long ruleId;
         private Long storeId;
         private String storeName;
+        private PincodeLocation location;
+
+        public PincodeLocation getLocation() {
+            return location;
+        }
+
+        public void setLocation(PincodeLocation location) {
+            this.location = location;
+        }
 
         private DeliveryResolution(boolean serviceable, boolean codAvailable, boolean prepaidAvailable, BigDecimal deliveryCharge,
                                    BigDecimal freeDeliveryThreshold, boolean freeDeliveryApplied, Integer minDeliveryDays,

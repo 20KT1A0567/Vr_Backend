@@ -19,6 +19,8 @@ public class PincodeDeliveryCheckResponse {
     private Integer minDeliveryDays;
     private Integer maxDeliveryDays;
     private String estimatedLabel;
+    private String expectedMinDate;
+    private String expectedMaxDate;
     private Long storeId;
     private String storeName;
     private Long ruleId;

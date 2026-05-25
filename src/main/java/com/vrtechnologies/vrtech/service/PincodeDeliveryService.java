@@ -7,17 +7,30 @@ import com.vrtechnologies.vrtech.dto.response.ProductImportResponse;
 import com.vrtechnologies.vrtech.entity.PincodeDeliveryRule;
 import com.vrtechnologies.vrtech.entity.SiteSettings;
 import com.vrtechnologies.vrtech.entity.Store;
+import com.vrtechnologies.vrtech.entity.PincodeZone;
+import com.vrtechnologies.vrtech.entity.PincodeBlacklist;
+import com.vrtechnologies.vrtech.entity.Holiday;
+import com.vrtechnologies.vrtech.entity.PincodeLookupLog;
+import com.vrtechnologies.vrtech.entity.PincodeApiCache;
 import com.vrtechnologies.vrtech.exception.BadRequestException;
 import com.vrtechnologies.vrtech.exception.ResourceNotFoundException;
 import com.vrtechnologies.vrtech.repository.PincodeDeliveryRuleRepository;
 import com.vrtechnologies.vrtech.repository.StoreRepository;
+import com.vrtechnologies.vrtech.repository.PincodeZoneRepository;
+import com.vrtechnologies.vrtech.repository.PincodeBlacklistRepository;
+import com.vrtechnologies.vrtech.repository.HolidayRepository;
+import com.vrtechnologies.vrtech.repository.PincodeLookupLogRepository;
+import com.vrtechnologies.vrtech.repository.PincodeApiCacheRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -30,10 +43,26 @@ public class PincodeDeliveryService {
 
     private final PincodeDeliveryRuleRepository pincodeDeliveryRuleRepository;
     private final StoreRepository storeRepository;
+    private final PincodeZoneRepository pincodeZoneRepository;
+    private final PincodeBlacklistRepository pincodeBlacklistRepository;
+    private final HolidayRepository holidayRepository;
+    private final PincodeLookupLogRepository pincodeLookupLogRepository;
+    private final PincodeApiCacheRepository pincodeApiCacheRepository;
 
-    public PincodeDeliveryService(PincodeDeliveryRuleRepository pincodeDeliveryRuleRepository, StoreRepository storeRepository) {
+    public PincodeDeliveryService(PincodeDeliveryRuleRepository pincodeDeliveryRuleRepository,
+                                  StoreRepository storeRepository,
+                                  PincodeZoneRepository pincodeZoneRepository,
+                                  PincodeBlacklistRepository pincodeBlacklistRepository,
+                                  HolidayRepository holidayRepository,
+                                  PincodeLookupLogRepository pincodeLookupLogRepository,
+                                  PincodeApiCacheRepository pincodeApiCacheRepository) {
         this.pincodeDeliveryRuleRepository = pincodeDeliveryRuleRepository;
         this.storeRepository = storeRepository;
+        this.pincodeZoneRepository = pincodeZoneRepository;
+        this.pincodeBlacklistRepository = pincodeBlacklistRepository;
+        this.holidayRepository = holidayRepository;
+        this.pincodeLookupLogRepository = pincodeLookupLogRepository;
+        this.pincodeApiCacheRepository = pincodeApiCacheRepository;
     }
 
     public List<PincodeDeliveryRuleResponse> getRules() {
@@ -181,6 +210,46 @@ public class PincodeDeliveryService {
     public PincodeDeliveryCheckResponse checkPincode(String pincode, BigDecimal subtotal, Long storeId, Boolean codRequested, String deliveryState, SiteSettings settings) {
         String normalizedPincode = normalizePincode(pincode);
         DeliveryResolution resolution = resolveDelivery(settings, normalizedPincode, deliveryState, subtotal, storeId, Boolean.TRUE.equals(codRequested));
+
+        // Find location info
+        PincodeLocation loc = null;
+        try {
+            loc = resolveLocation(normalizedPincode);
+        } catch (Exception ignored) {}
+
+        String stateName = loc != null ? loc.getStateName() : null;
+        String districtName = loc != null ? loc.getDistrictName() : null;
+        String cityName = loc != null ? loc.getCityName() : null;
+
+        // Log lookup in the database
+        try {
+            PincodeLookupLog logEntry = new PincodeLookupLog();
+            logEntry.setPincode(normalizedPincode);
+            logEntry.setStateName(stateName);
+            logEntry.setDistrictName(districtName);
+            logEntry.setCityName(cityName);
+            logEntry.setServiceable(resolution.isServiceable());
+            logEntry.setRuleSource(resolution.getRuleSource());
+            pincodeLookupLogRepository.save(logEntry);
+        } catch (Exception e) {
+            org.slf4j.LoggerFactory.getLogger(PincodeDeliveryService.class)
+                    .error("Failed to log pincode lookup: {}", e.getMessage());
+        }
+
+        // Calculate expected dates (skipping weekends & holidays)
+        LocalDate expectedMinDate = null;
+        LocalDate expectedMaxDate = null;
+        if (resolution.isServiceable() && resolution.getMinDeliveryDays() != null) {
+            LocalDate baseDate = LocalDate.now();
+            if (java.time.LocalTime.now().getHour() >= 18) { // 18:00 cutoff
+                baseDate = baseDate.plusDays(1);
+            }
+            expectedMinDate = addBusinessDays(baseDate, resolution.getMinDeliveryDays());
+            expectedMaxDate = addBusinessDays(baseDate, resolution.getMaxDeliveryDays() != null ? resolution.getMaxDeliveryDays() : resolution.getMinDeliveryDays());
+        }
+
+        DateTimeFormatter dtf = DateTimeFormatter.ISO_LOCAL_DATE;
+
         return PincodeDeliveryCheckResponse.builder()
                 .pincode(normalizedPincode)
                 .serviceable(resolution.isServiceable())
@@ -193,6 +262,8 @@ public class PincodeDeliveryService {
                 .minDeliveryDays(resolution.getMinDeliveryDays())
                 .maxDeliveryDays(resolution.getMaxDeliveryDays())
                 .estimatedLabel(estimatedLabel(resolution.getMinDeliveryDays(), resolution.getMaxDeliveryDays()))
+                .expectedMinDate(expectedMinDate != null ? expectedMinDate.format(dtf) : null)
+                .expectedMaxDate(expectedMaxDate != null ? expectedMaxDate.format(dtf) : null)
                 .storeId(resolution.getStoreId())
                 .storeName(resolution.getStoreName())
                 .ruleId(resolution.getRuleId())
@@ -210,20 +281,207 @@ public class PincodeDeliveryService {
         String normalizedPincode = trimToNull(pincode);
         if (normalizedPincode != null) {
             normalizedPincode = normalizePincode(normalizedPincode);
+        } else {
+            return DeliveryResolution.unserviceable("PINCODE", "Pincode is required");
         }
-        if (normalizedPincode != null) {
-            List<PincodeDeliveryRule> candidates = pincodeDeliveryRuleRepository.findByPincodeAndActiveTrueOrderByPriorityAscIdAsc(normalizedPincode);
-            PincodeDeliveryRule best = pickBestRule(candidates, storeId);
-            if (best != null) {
-                return fromRule(best, safeSubtotal, codRequested, settings);
+
+        // 1. Blacklist Check
+        Optional<PincodeBlacklist> blacklistOpt = pincodeBlacklistRepository.findByPincodeAndActiveTrue(normalizedPincode);
+        if (blacklistOpt.isPresent()) {
+            return DeliveryResolution.unserviceable("BLACKLIST", "Delivery is not available for this pincode (Blacklisted)");
+        }
+
+        // 2. Specific Override Check
+        List<PincodeDeliveryRule> candidates = pincodeDeliveryRuleRepository.findByPincodeAndActiveTrueOrderByPriorityAscIdAsc(normalizedPincode);
+        PincodeDeliveryRule best = pickBestRule(candidates, storeId);
+        if (best != null) {
+            return fromRule(best, safeSubtotal, codRequested, settings);
+        }
+
+        // 3. Location Lookup (Cache or India Post API)
+        PincodeLocation location = resolveLocation(normalizedPincode);
+
+        // 4. Zone Check
+        if (location != null) {
+            List<PincodeZone> zones = pincodeZoneRepository.findByActiveTrueOrderByPriorityAscIdAsc();
+            for (PincodeZone zone : zones) {
+                if (matchesZone(zone, location)) {
+                    return fromZone(zone, safeSubtotal, codRequested, settings);
+                }
             }
         }
 
-        if (settings != null && deliveryState != null && !deliveryState.isBlank()) {
-            return fromStateFallback(settings, safeSubtotal, deliveryState);
+        // 5. Fallback Check (State settings)
+        String fallbackState = deliveryState;
+        if (location != null && location.getStateName() != null) {
+            fallbackState = location.getStateName();
+        }
+        if (settings != null && fallbackState != null && !fallbackState.isBlank()) {
+            return fromStateFallback(settings, safeSubtotal, fallbackState);
         }
 
         return DeliveryResolution.unserviceable("PINCODE", "This pincode is not serviceable yet");
+    }
+
+    private LocalDate addBusinessDays(LocalDate baseDate, int daysToAdd) {
+        LocalDate date = baseDate;
+        int remaining = Math.max(0, daysToAdd);
+        while (remaining > 0) {
+            date = date.plusDays(1);
+            int dayOfWeek = date.getDayOfWeek().getValue();
+            boolean isWeekend = (dayOfWeek == 6 || dayOfWeek == 7);
+            boolean isHoliday = holidayRepository.existsByHolidayDateAndActiveTrue(date);
+            if (!isWeekend && !isHoliday) {
+                remaining--;
+            }
+        }
+        return date;
+    }
+
+    private boolean matchesZone(PincodeZone zone, PincodeLocation location) {
+        String matchValue = zone.getMatchValue().trim();
+        if ("PINCODE_PREFIX".equalsIgnoreCase(zone.getMatchType())) {
+            return location.getPincode().startsWith(matchValue);
+        } else if ("DISTRICT".equalsIgnoreCase(zone.getMatchType())) {
+            return location.getDistrictName().equalsIgnoreCase(matchValue);
+        } else if ("STATE".equalsIgnoreCase(zone.getMatchType())) {
+            return location.getStateName().equalsIgnoreCase(matchValue);
+        }
+        return false;
+    }
+
+    private DeliveryResolution fromZone(PincodeZone zone, BigDecimal subtotal, boolean codRequested, SiteSettings settings) {
+        if (!zone.isServiceable()) {
+            return DeliveryResolution.unserviceable("ZONE:" + zone.getId(), "Delivery is not available for this zone");
+        }
+        if (codRequested && !zone.isCodAvailable()) {
+            return DeliveryResolution.unserviceable("ZONE:" + zone.getId(), "Cash on delivery is not available for this zone");
+        }
+        if (!codRequested && !zone.isPrepaidAvailable()) {
+            return DeliveryResolution.unserviceable("ZONE:" + zone.getId(), "Prepaid delivery is not available for this zone");
+        }
+
+        BigDecimal threshold = zone.getFreeDeliveryThreshold() != null
+                ? zone.getFreeDeliveryThreshold()
+                : settings == null ? null : settings.getFreeDeliveryThreshold();
+        boolean freeApplied = threshold != null && threshold.compareTo(BigDecimal.ZERO) > 0 && subtotal.compareTo(threshold) >= 0;
+        BigDecimal charge = freeApplied ? BigDecimal.ZERO : defaultDecimal(zone.getDeliveryCharge());
+        return DeliveryResolution.serviceable(
+                zone.isCodAvailable(),
+                zone.isPrepaidAvailable(),
+                charge.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
+                threshold,
+                freeApplied,
+                zone.getMinDeliveryDays(),
+                zone.getMaxDeliveryDays(),
+                "ZONE:" + zone.getId(),
+                "Delivery available"
+        );
+    }
+
+    private PincodeLocation resolveLocation(String pincode) {
+        try {
+            Optional<PincodeApiCache> cached = pincodeApiCacheRepository.findById(pincode);
+            if (cached.isPresent()) {
+                PincodeApiCache cache = cached.get();
+                return new PincodeLocation(cache.getPincode(), cache.getStateName(), cache.getDistrictName(), cache.getCityName());
+            }
+
+            RestTemplate restTemplate = new RestTemplate();
+            String url = "https://api.postalpincode.in/pincode/" + pincode;
+            PostOfficeResponse[] responses = restTemplate.getForObject(url, PostOfficeResponse[].class);
+
+            if (responses != null && responses.length > 0) {
+                PostOfficeResponse response = responses[0];
+                if ("Success".equalsIgnoreCase(response.getStatus()) && response.getPostOffice() != null && !response.getPostOffice().isEmpty()) {
+                    PostOfficeDetail detail = response.getPostOffice().get(0);
+                    String stateName = detail.getState();
+                    String districtName = detail.getDistrict();
+                    String cityName = detail.getDivision();
+                    if (cityName == null || cityName.isBlank()) {
+                        cityName = detail.getName();
+                    }
+
+                    if (stateName != null && districtName != null && cityName != null) {
+                        PincodeApiCache newCache = new PincodeApiCache();
+                        newCache.setPincode(pincode);
+                        newCache.setStateName(stateName.trim());
+                        newCache.setDistrictName(districtName.trim());
+                        newCache.setCityName(cityName.trim());
+                        pincodeApiCacheRepository.save(newCache);
+
+                        return new PincodeLocation(pincode, stateName.trim(), districtName.trim(), cityName.trim());
+                    }
+                }
+            }
+        } catch (Exception exception) {
+            org.slf4j.LoggerFactory.getLogger(PincodeDeliveryService.class)
+                    .warn("PostOffice API error for pincode {}: {}", pincode, exception.getMessage());
+        }
+        return null;
+    }
+
+    public static class PincodeLocation {
+        private final String pincode;
+        private final String stateName;
+        private final String districtName;
+        private final String cityName;
+
+        public PincodeLocation(String pincode, String stateName, String districtName, String cityName) {
+            this.pincode = pincode;
+            this.stateName = stateName;
+            this.districtName = districtName;
+            this.cityName = cityName;
+        }
+
+        public String getPincode() { return pincode; }
+        public String getStateName() { return stateName; }
+        public String getDistrictName() { return districtName; }
+        public String getCityName() { return cityName; }
+    }
+
+    public static class PostOfficeResponse {
+        @com.fasterxml.jackson.annotation.JsonProperty("Message")
+        private String message;
+        @com.fasterxml.jackson.annotation.JsonProperty("Status")
+        private String status;
+        @com.fasterxml.jackson.annotation.JsonProperty("PostOffice")
+        private List<PostOfficeDetail> postOffice;
+
+        public String getMessage() { return message; }
+        public void setMessage(String message) { this.message = message; }
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+        public List<PostOfficeDetail> getPostOffice() { return postOffice; }
+        public void setPostOffice(List<PostOfficeDetail> postOffice) { this.postOffice = postOffice; }
+    }
+
+    public static class PostOfficeDetail {
+        @com.fasterxml.jackson.annotation.JsonProperty("Name")
+        private String name;
+        @com.fasterxml.jackson.annotation.JsonProperty("State")
+        private String state;
+        @com.fasterxml.jackson.annotation.JsonProperty("District")
+        private String district;
+        @com.fasterxml.jackson.annotation.JsonProperty("Division")
+        private String division;
+        @com.fasterxml.jackson.annotation.JsonProperty("Circle")
+        private String circle;
+        @com.fasterxml.jackson.annotation.JsonProperty("Pincode")
+        private String pincode;
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public String getState() { return state; }
+        public void setState(String state) { this.state = state; }
+        public String getDistrict() { return district; }
+        public void setDistrict(String district) { this.district = district; }
+        public String getDivision() { return division; }
+        public void setDivision(String division) { this.division = division; }
+        public String getCircle() { return circle; }
+        public void setCircle(String circle) { this.circle = circle; }
+        public String getPincode() { return pincode; }
+        public void setPincode(String pincode) { this.pincode = pincode; }
     }
 
     private DeliveryResolution fromRule(PincodeDeliveryRule rule, BigDecimal subtotal, boolean codRequested, SiteSettings settings) {
@@ -508,6 +766,57 @@ public class PincodeDeliveryService {
             return "\"" + escaped + "\"";
         }
         return escaped;
+    }
+
+    // Zones CRUD
+    public List<PincodeZone> getZones() {
+        return pincodeZoneRepository.findAllByOrderByPriorityAscIdAsc();
+    }
+
+    @Transactional
+    public PincodeZone saveZone(PincodeZone zone) {
+        return pincodeZoneRepository.save(zone);
+    }
+
+    @Transactional
+    public void deleteZone(Long id) {
+        pincodeZoneRepository.deleteById(id);
+    }
+
+    // Blacklist CRUD
+    public List<PincodeBlacklist> getBlacklist() {
+        return pincodeBlacklistRepository.findAllByOrderByPincodeAsc();
+    }
+
+    @Transactional
+    public PincodeBlacklist saveBlacklist(PincodeBlacklist entry) {
+        entry.setPincode(normalizePincode(entry.getPincode()));
+        return pincodeBlacklistRepository.save(entry);
+    }
+
+    @Transactional
+    public void deleteBlacklist(Long id) {
+        pincodeBlacklistRepository.deleteById(id);
+    }
+
+    // Holidays CRUD
+    public List<Holiday> getHolidays() {
+        return holidayRepository.findAllByOrderByHolidayDateAsc();
+    }
+
+    @Transactional
+    public Holiday saveHoliday(Holiday holiday) {
+        return holidayRepository.save(holiday);
+    }
+
+    @Transactional
+    public void deleteHoliday(Long id) {
+        holidayRepository.deleteById(id);
+    }
+
+    // Logs Query
+    public List<PincodeLookupLog> getLookupLogs() {
+        return pincodeLookupLogRepository.findTop100ByOrderByCreatedAtDesc();
     }
 
     public static final class DeliveryResolution {

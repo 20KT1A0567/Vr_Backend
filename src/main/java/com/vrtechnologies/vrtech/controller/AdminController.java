@@ -48,6 +48,10 @@ import com.vrtechnologies.vrtech.entity.Coupon;
 import com.vrtechnologies.vrtech.entity.Enquiry;
 import com.vrtechnologies.vrtech.entity.SiteSettings;
 import com.vrtechnologies.vrtech.entity.Store;
+import com.vrtechnologies.vrtech.entity.PincodeZone;
+import com.vrtechnologies.vrtech.entity.PincodeBlacklist;
+import com.vrtechnologies.vrtech.entity.Holiday;
+import com.vrtechnologies.vrtech.entity.PincodeLookupLog;
 import com.vrtechnologies.vrtech.entity.NotificationLog;
 import com.vrtechnologies.vrtech.entity.enums.EnquiryStatus;
 import com.vrtechnologies.vrtech.entity.enums.Module;
@@ -439,6 +443,118 @@ public class AdminController {
         ProductImportResponse response = pincodeDeliveryService.importCsv(file);
         activityLogService.log(admin, Module.SETTINGS, PermissionAction.CREATE, "PincodeDeliveryRule", null, "Delivery pincode CSV imported");
         return ApiResponse.ok("Delivery pincode CSV processed", response);
+    }
+
+    // --- ZONES MANAGEMENT ---
+    @GetMapping("/delivery/zones")
+    public ApiResponse<List<PincodeZone>> deliveryZones() {
+        requirePermission(currentAdmin(), Module.SETTINGS, PermissionAction.VIEW);
+        return ApiResponse.ok("Delivery zones fetched", pincodeDeliveryService.getZones());
+    }
+
+    @PostMapping("/delivery/zones")
+    public ApiResponse<PincodeZone> createDeliveryZone(@Valid @RequestBody PincodeZone zone) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.CREATE);
+        PincodeZone response = pincodeDeliveryService.saveZone(zone);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.CREATE, "PincodeZone", response.getId(), "Delivery zone created: " + response.getZoneName());
+        return ApiResponse.ok("Delivery zone created", response);
+    }
+
+    @PutMapping("/delivery/zones/{id}")
+    public ApiResponse<PincodeZone> updateDeliveryZone(@PathVariable Long id, @Valid @RequestBody PincodeZone zone) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.UPDATE);
+        zone.setId(id);
+        PincodeZone response = pincodeDeliveryService.saveZone(zone);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.UPDATE, "PincodeZone", id, "Delivery zone updated: " + response.getZoneName());
+        return ApiResponse.ok("Delivery zone updated", response);
+    }
+
+    @DeleteMapping("/delivery/zones/{id}")
+    public ApiResponse<Object> deleteDeliveryZone(@PathVariable Long id) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.DELETE);
+        pincodeDeliveryService.deleteZone(id);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.DELETE, "PincodeZone", id, "Delivery zone deleted");
+        return ApiResponse.ok("Delivery zone deleted", null);
+    }
+
+    // --- BLACKLIST MANAGEMENT ---
+    @GetMapping("/delivery/blacklist")
+    public ApiResponse<List<PincodeBlacklist>> deliveryBlacklist() {
+        requirePermission(currentAdmin(), Module.SETTINGS, PermissionAction.VIEW);
+        return ApiResponse.ok("Delivery blacklist fetched", pincodeDeliveryService.getBlacklist());
+    }
+
+    @PostMapping("/delivery/blacklist")
+    public ApiResponse<PincodeBlacklist> createBlacklistEntry(@Valid @RequestBody PincodeBlacklist entry) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.CREATE);
+        PincodeBlacklist response = pincodeDeliveryService.saveBlacklist(entry);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.CREATE, "PincodeBlacklist", response.getId(), "Pincode blacklisted: " + response.getPincode());
+        return ApiResponse.ok("Pincode blacklisted", response);
+    }
+
+    @PutMapping("/delivery/blacklist/{id}")
+    public ApiResponse<PincodeBlacklist> updateBlacklistEntry(@PathVariable Long id, @Valid @RequestBody PincodeBlacklist entry) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.UPDATE);
+        entry.setId(id);
+        PincodeBlacklist response = pincodeDeliveryService.saveBlacklist(entry);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.UPDATE, "PincodeBlacklist", id, "Pincode blacklist updated: " + response.getPincode());
+        return ApiResponse.ok("Blacklist entry updated", response);
+    }
+
+    @DeleteMapping("/delivery/blacklist/{id}")
+    public ApiResponse<Object> deleteBlacklistEntry(@PathVariable Long id) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.DELETE);
+        pincodeDeliveryService.deleteBlacklist(id);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.DELETE, "PincodeBlacklist", id, "Pincode removed from blacklist");
+        return ApiResponse.ok("Pincode removed from blacklist", null);
+    }
+
+    // --- HOLIDAYS MANAGEMENT ---
+    @GetMapping("/delivery/holidays")
+    public ApiResponse<List<Holiday>> deliveryHolidays() {
+        requirePermission(currentAdmin(), Module.SETTINGS, PermissionAction.VIEW);
+        return ApiResponse.ok("Holidays fetched", pincodeDeliveryService.getHolidays());
+    }
+
+    @PostMapping("/delivery/holidays")
+    public ApiResponse<Holiday> createHoliday(@Valid @RequestBody Holiday holiday) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.CREATE);
+        Holiday response = pincodeDeliveryService.saveHoliday(holiday);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.CREATE, "Holiday", response.getId(), "Holiday added: " + response.getName());
+        return ApiResponse.ok("Holiday added", response);
+    }
+
+    @PutMapping("/delivery/holidays/{id}")
+    public ApiResponse<Holiday> updateHoliday(@PathVariable Long id, @Valid @RequestBody Holiday holiday) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.UPDATE);
+        holiday.setId(id);
+        Holiday response = pincodeDeliveryService.saveHoliday(holiday);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.UPDATE, "Holiday", id, "Holiday updated: " + response.getName());
+        return ApiResponse.ok("Holiday updated", response);
+    }
+
+    @DeleteMapping("/delivery/holidays/{id}")
+    public ApiResponse<Object> deleteHoliday(@PathVariable Long id) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.DELETE);
+        pincodeDeliveryService.deleteHoliday(id);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.DELETE, "Holiday", id, "Holiday deleted");
+        return ApiResponse.ok("Holiday deleted", null);
+    }
+
+    // --- LOOKUP LOGS ---
+    @GetMapping("/delivery/logs")
+    public ApiResponse<List<PincodeLookupLog>> deliveryLookupLogs() {
+        requirePermission(currentAdmin(), Module.SETTINGS, PermissionAction.VIEW);
+        return ApiResponse.ok("Delivery lookup logs fetched", pincodeDeliveryService.getLookupLogs());
     }
 
     @GetMapping("/settings")

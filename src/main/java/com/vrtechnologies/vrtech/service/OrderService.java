@@ -85,6 +85,7 @@ public class OrderService {
     private final NotificationService notificationService;
     private final UserAddressRepository userAddressRepository;
     private final SiteSettingsRepository siteSettingsRepository;
+    private final PincodeDeliveryService pincodeDeliveryService;
     private final ObjectMapper objectMapper;
 
     public OrderService(
@@ -106,6 +107,7 @@ public class OrderService {
             NotificationService notificationService,
             UserAddressRepository userAddressRepository,
             SiteSettingsRepository siteSettingsRepository,
+            PincodeDeliveryService pincodeDeliveryService,
             ObjectMapper objectMapper
     ) {
         this.customerOrderRepository = customerOrderRepository;
@@ -126,6 +128,7 @@ public class OrderService {
         this.notificationService = notificationService;
         this.userAddressRepository = userAddressRepository;
         this.siteSettingsRepository = siteSettingsRepository;
+        this.pincodeDeliveryService = pincodeDeliveryService;
         this.objectMapper = objectMapper;
     }
 
@@ -156,6 +159,10 @@ public class OrderService {
                 && (request.getDeliveryState() == null || request.getDeliveryState().isBlank())) {
             throw new BadRequestException("Delivery state is required for delivery orders");
         }
+        if (request.getDeliveryType().name().equals("DELIVERY")
+                && (request.getDeliveryPostalCode() == null || request.getDeliveryPostalCode().isBlank())) {
+            throw new BadRequestException("Delivery pincode is required for delivery orders");
+        }
 
         if (isOnlinePaymentMethod(request.getPaymentMethod()) && !razorpayService.isEnabled()) {
             throw new BadRequestException("Razorpay payments are not configured yet");
@@ -177,6 +184,7 @@ public class OrderService {
         order.setContactEmail(trimToNull(request.getContactEmail()));
         order.setDeliveryAddress(trimToNull(request.getDeliveryAddress()));
         order.setDeliveryState(trimToNull(request.getDeliveryState()));
+        order.setDeliveryPostalCode(trimToNull(request.getDeliveryPostalCode()));
         order.setNotes(trimToNull(request.getNotes()));
         updateUserCheckoutPreferences(user, request);
 
@@ -204,9 +212,13 @@ public class OrderService {
         order.setSubtotalAmount(total);
         order.setDiscountAmount(discount);
         BigDecimal afterDiscount = total.subtract(discount).max(BigDecimal.ZERO);
-        BigDecimal deliveryCharge = calculateDeliveryCharge(settings, request, afterDiscount);
+        PincodeDeliveryService.DeliveryResolution deliveryResolution = resolveDelivery(settings, request, store, afterDiscount);
+        BigDecimal deliveryCharge = deliveryResolution.getDeliveryCharge();
         BigDecimal taxAmount = calculateTax(settings, afterDiscount);
         order.setDeliveryCharge(deliveryCharge);
+        order.setPromisedMinDeliveryDays(deliveryResolution.getMinDeliveryDays());
+        order.setPromisedMaxDeliveryDays(deliveryResolution.getMaxDeliveryDays());
+        order.setDeliveryRuleId(deliveryResolution.getRuleId());
         order.setTaxAmount(taxAmount);
         order.setTotalAmount(afterDiscount.add(taxAmount).add(deliveryCharge).setScale(2, RoundingMode.HALF_UP));
         CustomerOrder saved = customerOrderRepository.save(order);
@@ -250,9 +262,23 @@ public class OrderService {
         if (request.getDeliveryType() == null) {
             throw new BadRequestException("Delivery type is required");
         }
+        if (request.getDeliveryType().name().equals("PICKUP") && !settings.isPickupEnabled()) {
+            throw new BadRequestException("Store pickup is currently disabled");
+        }
+        if (request.getDeliveryType().name().equals("DELIVERY") && !settings.isDeliveryEnabled()) {
+            throw new BadRequestException("Delivery is currently disabled");
+        }
         if (request.getDeliveryType().name().equals("DELIVERY")
                 && (request.getDeliveryAddress() == null || request.getDeliveryAddress().isBlank())) {
             throw new BadRequestException("Delivery address is required for delivery orders");
+        }
+        if (request.getDeliveryType().name().equals("DELIVERY")
+                && (request.getDeliveryState() == null || request.getDeliveryState().isBlank())) {
+            throw new BadRequestException("Delivery state is required for delivery orders");
+        }
+        if (request.getDeliveryType().name().equals("DELIVERY")
+                && (request.getDeliveryPostalCode() == null || request.getDeliveryPostalCode().isBlank())) {
+            throw new BadRequestException("Delivery pincode is required for delivery orders");
         }
         Store store = storeRepository.findById(request.getStoreId())
                 .filter(Store::isActive)
@@ -270,6 +296,7 @@ public class OrderService {
         order.setContactEmail(trimToNull(request.getContactEmail()));
         order.setDeliveryAddress(trimToNull(request.getDeliveryAddress()));
         order.setDeliveryState(trimToNull(request.getDeliveryState()));
+        order.setDeliveryPostalCode(trimToNull(request.getDeliveryPostalCode()));
         order.setNotes(trimToNull(request.getNotes()));
 
         BigDecimal total = BigDecimal.ZERO;
@@ -298,7 +325,11 @@ public class OrderService {
         order.setSubtotalAmount(total);
         order.setDiscountAmount(discount);
         BigDecimal afterDiscount = total.subtract(discount).max(BigDecimal.ZERO);
-        order.setDeliveryCharge(calculateDeliveryCharge(settings, request, afterDiscount));
+        PincodeDeliveryService.DeliveryResolution deliveryResolution = resolveDelivery(settings, request, store, afterDiscount);
+        order.setDeliveryCharge(deliveryResolution.getDeliveryCharge());
+        order.setPromisedMinDeliveryDays(deliveryResolution.getMinDeliveryDays());
+        order.setPromisedMaxDeliveryDays(deliveryResolution.getMaxDeliveryDays());
+        order.setDeliveryRuleId(deliveryResolution.getRuleId());
         order.setTaxAmount(calculateTax(settings, afterDiscount));
         order.setTotalAmount(afterDiscount.add(order.getTaxAmount()).add(order.getDeliveryCharge()).setScale(2, RoundingMode.HALF_UP));
 
@@ -1073,6 +1104,9 @@ public class OrderService {
                 .contactEmail(order.getContactEmail())
                 .deliveryAddress(order.getDeliveryAddress())
                 .deliveryState(order.getDeliveryState())
+                .deliveryPostalCode(order.getDeliveryPostalCode())
+                .promisedMinDeliveryDays(order.getPromisedMinDeliveryDays())
+                .promisedMaxDeliveryDays(order.getPromisedMaxDeliveryDays())
                 .notes(order.getNotes())
                 .cancellationReason(order.getCancellationReason())
                 .returnReason(order.getReturnReason())
@@ -1258,6 +1292,25 @@ public class OrderService {
         }
     }
 
+    private PincodeDeliveryService.DeliveryResolution resolveDelivery(SiteSettings settings, OrderRequest request, Store store, BigDecimal afterDiscount) {
+        if (request.getDeliveryType() == null || !request.getDeliveryType().name().equals("DELIVERY")) {
+            return PincodeDeliveryService.DeliveryResolution.serviceable(true, true, BigDecimal.ZERO, null, false, null, null, "PICKUP", "Pickup order");
+        }
+        boolean codRequested = request.getPaymentMethod() != null && request.getPaymentMethod().name().equals("CASH");
+        PincodeDeliveryService.DeliveryResolution resolution = pincodeDeliveryService.resolveDelivery(
+                settings,
+                request.getDeliveryPostalCode(),
+                request.getDeliveryState(),
+                afterDiscount,
+                store == null ? null : store.getId(),
+                codRequested
+        );
+        if (!resolution.isServiceable()) {
+            throw new BadRequestException(resolution.getMessage());
+        }
+        return resolution;
+    }
+
     private List<CheckoutProfileResponse.SavedAddressResponse> buildSavedAddresses(User user, List<CustomerOrder> recentOrders) {
         List<CheckoutProfileResponse.SavedAddressResponse> savedAddresses = new ArrayList<>();
         LinkedHashSet<String> seenAddresses = new LinkedHashSet<>();
@@ -1274,6 +1327,8 @@ public class OrderService {
                     .address(normalizedAddress)
                     .contactName(trimToNull(address.getContactName()))
                     .contactPhone(trimToNull(address.getContactPhone()))
+                    .state(trimToNull(address.getState()))
+                    .postalCode(trimToNull(address.getPostalCode()))
                     .defaultAddress(address.isDefaultAddress())
                     .build());
         });
@@ -1291,6 +1346,8 @@ public class OrderService {
                     .address(address)
                     .contactName(trimToNull(order.getContactName()))
                     .contactPhone(trimToNull(order.getContactPhone()))
+                    .state(trimToNull(order.getDeliveryState()))
+                    .postalCode(trimToNull(order.getDeliveryPostalCode()))
                     .defaultAddress(defaultAddress)
                     .build());
         }

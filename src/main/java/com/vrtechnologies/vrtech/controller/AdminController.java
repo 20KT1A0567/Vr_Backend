@@ -5,6 +5,7 @@ import com.vrtechnologies.vrtech.dto.request.BrandRequest;
 import com.vrtechnologies.vrtech.dto.request.CategoryRequest;
 import com.vrtechnologies.vrtech.dto.request.CouponRequest;
 import com.vrtechnologies.vrtech.dto.request.OrderActionRequest;
+import com.vrtechnologies.vrtech.dto.request.PincodeDeliveryRuleRequest;
 import com.vrtechnologies.vrtech.dto.request.ProductReviewRequest;
 import com.vrtechnologies.vrtech.dto.request.ReturnDecisionRequest;
 import com.vrtechnologies.vrtech.dto.request.ReturnPickupRequest;
@@ -29,8 +30,10 @@ import com.vrtechnologies.vrtech.dto.response.DashboardStatsResponse;
 import com.vrtechnologies.vrtech.dto.response.MediaUploadResponse;
 import com.vrtechnologies.vrtech.dto.response.OrderResponse;
 import com.vrtechnologies.vrtech.dto.response.OrderTimelineEventResponse;
+import com.vrtechnologies.vrtech.dto.response.PincodeDeliveryRuleResponse;
 import com.vrtechnologies.vrtech.dto.response.PaymentRecoveryResponse;
 import com.vrtechnologies.vrtech.dto.response.PaymentWebhookEventResponse;
+import com.vrtechnologies.vrtech.dto.response.ProductImportResponse;
 import com.vrtechnologies.vrtech.dto.response.ProductReviewResponse;
 import com.vrtechnologies.vrtech.dto.response.RazorpaySettingsResponse;
 import com.vrtechnologies.vrtech.dto.response.RefundTransactionResponse;
@@ -67,6 +70,7 @@ import com.vrtechnologies.vrtech.service.InventoryService;
 import com.vrtechnologies.vrtech.service.NotificationService;
 import com.vrtechnologies.vrtech.service.OrderService;
 import com.vrtechnologies.vrtech.service.PermissionService;
+import com.vrtechnologies.vrtech.service.PincodeDeliveryService;
 import com.vrtechnologies.vrtech.service.ProductReviewService;
 import com.vrtechnologies.vrtech.service.RazorpayService;
 import com.vrtechnologies.vrtech.service.ReturnRequestService;
@@ -110,6 +114,7 @@ public class AdminController {
     private final CatalogService catalogService;
     private final CloudinaryService cloudinaryService;
     private final PermissionService permissionService;
+    private final PincodeDeliveryService pincodeDeliveryService;
     private final ProductReviewService productReviewService;
     private final UserContextService userContextService;
     private final RazorpayService razorpayService;
@@ -129,6 +134,7 @@ public class AdminController {
             CatalogService catalogService,
             CloudinaryService cloudinaryService,
             PermissionService permissionService,
+            PincodeDeliveryService pincodeDeliveryService,
             ProductReviewService productReviewService,
             UserContextService userContextService,
             RazorpayService razorpayService,
@@ -147,6 +153,7 @@ public class AdminController {
         this.catalogService = catalogService;
         this.cloudinaryService = cloudinaryService;
         this.permissionService = permissionService;
+        this.pincodeDeliveryService = pincodeDeliveryService;
         this.productReviewService = productReviewService;
         this.userContextService = userContextService;
         this.razorpayService = razorpayService;
@@ -384,6 +391,54 @@ public class AdminController {
         adminService.deleteCoupon(id);
         activityLogService.log(admin, Module.COUPONS, PermissionAction.DELETE, "Coupon", id, "Coupon deleted");
         return ApiResponse.ok("Coupon deleted", null);
+    }
+
+    @GetMapping("/delivery/pincodes")
+    public ApiResponse<List<PincodeDeliveryRuleResponse>> deliveryPincodes() {
+        requirePermission(currentAdmin(), Module.SETTINGS, PermissionAction.VIEW);
+        return ApiResponse.ok("Delivery pincode rules fetched", pincodeDeliveryService.getRules());
+    }
+
+    @GetMapping(value = "/delivery/pincodes/export", produces = "text/csv")
+    public ResponseEntity<byte[]> exportDeliveryPincodes() {
+        requirePermission(currentAdmin(), Module.SETTINGS, PermissionAction.EXPORT);
+        return csv("delivery-pincodes.csv", pincodeDeliveryService.exportCsv());
+    }
+
+    @PostMapping("/delivery/pincodes")
+    public ApiResponse<PincodeDeliveryRuleResponse> createDeliveryPincode(@Valid @RequestBody PincodeDeliveryRuleRequest request) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.CREATE);
+        PincodeDeliveryRuleResponse response = pincodeDeliveryService.saveRule(request, null);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.CREATE, "PincodeDeliveryRule", response.getId(), "Delivery pincode created: " + response.getPincode());
+        return ApiResponse.ok("Delivery pincode created", response);
+    }
+
+    @PutMapping("/delivery/pincodes/{id}")
+    public ApiResponse<PincodeDeliveryRuleResponse> updateDeliveryPincode(@PathVariable Long id, @Valid @RequestBody PincodeDeliveryRuleRequest request) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.UPDATE);
+        PincodeDeliveryRuleResponse response = pincodeDeliveryService.saveRule(request, id);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.UPDATE, "PincodeDeliveryRule", id, "Delivery pincode updated: " + response.getPincode());
+        return ApiResponse.ok("Delivery pincode updated", response);
+    }
+
+    @DeleteMapping("/delivery/pincodes/{id}")
+    public ApiResponse<Object> deleteDeliveryPincode(@PathVariable Long id) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.DELETE);
+        pincodeDeliveryService.deleteRule(id);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.DELETE, "PincodeDeliveryRule", id, "Delivery pincode deleted");
+        return ApiResponse.ok("Delivery pincode deleted", null);
+    }
+
+    @PostMapping(value = "/delivery/pincodes/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<ProductImportResponse> importDeliveryPincodes(@RequestParam("file") MultipartFile file) {
+        User admin = currentAdmin();
+        requirePermission(admin, Module.SETTINGS, PermissionAction.CREATE);
+        ProductImportResponse response = pincodeDeliveryService.importCsv(file);
+        activityLogService.log(admin, Module.SETTINGS, PermissionAction.CREATE, "PincodeDeliveryRule", null, "Delivery pincode CSV imported");
+        return ApiResponse.ok("Delivery pincode CSV processed", response);
     }
 
     @GetMapping("/settings")

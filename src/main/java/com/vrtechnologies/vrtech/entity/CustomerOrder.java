@@ -99,6 +99,18 @@ public class CustomerOrder extends BaseEntity {
     @Column(length = 80)
     private String deliveryState;
 
+    @Column(name = "delivery_postal_code", length = 6)
+    private String deliveryPostalCode;
+
+    @Column(name = "promised_min_delivery_days")
+    private Integer promisedMinDeliveryDays;
+
+    @Column(name = "promised_max_delivery_days")
+    private Integer promisedMaxDeliveryDays;
+
+    @Column(name = "delivery_rule_id")
+    private Long deliveryRuleId;
+
     @Column(columnDefinition = "TEXT")
     private String notes;
 

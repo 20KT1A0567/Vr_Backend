@@ -34,6 +34,9 @@ public class OrderResponse {
     private String contactEmail;
     private String deliveryAddress;
     private String deliveryState;
+    private String deliveryPostalCode;
+    private Integer promisedMinDeliveryDays;
+    private Integer promisedMaxDeliveryDays;
     private String notes;
     private String cancellationReason;
     private String returnReason;

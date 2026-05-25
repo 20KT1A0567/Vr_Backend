@@ -44,6 +44,10 @@ public class SchemaCompatibilityConfig {
             migrate(jdbcTemplate, "ALTER TABLE orders ADD COLUMN tax_amount DECIMAL(10,2) NOT NULL DEFAULT 0");
             migrate(jdbcTemplate, "ALTER TABLE orders ADD COLUMN delivery_charge DECIMAL(10,2) NOT NULL DEFAULT 0");
             migrate(jdbcTemplate, "ALTER TABLE orders ADD COLUMN delivery_state VARCHAR(80) NULL");
+            migrate(jdbcTemplate, "ALTER TABLE orders ADD COLUMN delivery_postal_code VARCHAR(6) NULL");
+            migrate(jdbcTemplate, "ALTER TABLE orders ADD COLUMN promised_min_delivery_days INT NULL");
+            migrate(jdbcTemplate, "ALTER TABLE orders ADD COLUMN promised_max_delivery_days INT NULL");
+            migrate(jdbcTemplate, "ALTER TABLE orders ADD COLUMN delivery_rule_id BIGINT NULL");
             migrate(jdbcTemplate, "ALTER TABLE orders MODIFY COLUMN user_id BIGINT NULL");
             migrate(jdbcTemplate, "ALTER TABLE orders ADD COLUMN guest_checkout BIT NOT NULL DEFAULT 0");
             migrate(jdbcTemplate, "ALTER TABLE payment_transactions MODIFY COLUMN gateway VARCHAR(24) NOT NULL");
@@ -113,6 +117,24 @@ public class SchemaCompatibilityConfig {
 
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS payment_webhook_events (id BIGINT NOT NULL AUTO_INCREMENT, gateway_event_id VARCHAR(128) NULL UNIQUE, gateway VARCHAR(64) NOT NULL DEFAULT 'RAZORPAY', event_type VARCHAR(80) NULL, status VARCHAR(32) NULL, gateway_order_id VARCHAR(128) NULL, gateway_payment_id VARCHAR(128) NULL, user_agent VARCHAR(255) NULL, payload LONGTEXT NULL, error_message TEXT NULL, processed_at DATETIME NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id))");
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS refund_transactions (id BIGINT NOT NULL AUTO_INCREMENT, order_id BIGINT NOT NULL, payment_transaction_id BIGINT NULL, refund_id VARCHAR(128) NULL, amount DECIMAL(10,2) NOT NULL DEFAULT 0, status VARCHAR(32) NOT NULL DEFAULT 'RECORDED', reason TEXT NULL, refunded_at DATETIME NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id))");
+            migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS pincode_delivery_rules (id BIGINT NOT NULL AUTO_INCREMENT, pincode VARCHAR(6) NOT NULL, country_code VARCHAR(2) NOT NULL DEFAULT 'IN', state_name VARCHAR(80) NULL, city_name VARCHAR(120) NULL, zone_name VARCHAR(80) NULL, serviceable BIT NOT NULL DEFAULT 1, cod_available BIT NOT NULL DEFAULT 1, prepaid_available BIT NOT NULL DEFAULT 1, delivery_charge DECIMAL(10,2) NOT NULL DEFAULT 0, free_delivery_threshold DECIMAL(10,2) NULL, min_delivery_days INT NOT NULL DEFAULT 1, max_delivery_days INT NOT NULL DEFAULT 5, store_id BIGINT NULL, priority INT NOT NULL DEFAULT 100, active BIT NOT NULL DEFAULT 1, notes VARCHAR(255) NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id))");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN country_code VARCHAR(2) NOT NULL DEFAULT 'IN'");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN state_name VARCHAR(80) NULL");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN city_name VARCHAR(120) NULL");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN zone_name VARCHAR(80) NULL");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN serviceable BIT NOT NULL DEFAULT 1");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN cod_available BIT NOT NULL DEFAULT 1");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN prepaid_available BIT NOT NULL DEFAULT 1");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN delivery_charge DECIMAL(10,2) NOT NULL DEFAULT 0");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN free_delivery_threshold DECIMAL(10,2) NULL");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN min_delivery_days INT NOT NULL DEFAULT 1");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN max_delivery_days INT NOT NULL DEFAULT 5");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN store_id BIGINT NULL");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN priority INT NOT NULL DEFAULT 100");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN active BIT NOT NULL DEFAULT 1");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN notes VARCHAR(255) NULL");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN created_at DATETIME NOT NULL");
+            migrate(jdbcTemplate, "ALTER TABLE pincode_delivery_rules ADD COLUMN updated_at DATETIME NOT NULL");
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS recently_viewed_products (id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NULL, product_id BIGINT NOT NULL, anonymous_id VARCHAR(128) NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id))");
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS price_drop_alerts (id BIGINT NOT NULL AUTO_INCREMENT, product_id BIGINT NOT NULL, email VARCHAR(255) NOT NULL, phone VARCHAR(40) NULL, target_price DECIMAL(10,2) NULL, status VARCHAR(24) NOT NULL DEFAULT 'WAITING', notified_at DATETIME NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id))");
             migrate(jdbcTemplate, "ALTER TABLE return_requests ADD COLUMN pickup_scheduled_at DATETIME NULL");

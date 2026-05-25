@@ -26,6 +26,8 @@ public class CheckoutProfileResponse {
         private String address;
         private String contactName;
         private String contactPhone;
+        private String state;
+        private String postalCode;
         private boolean defaultAddress;
     }
 }

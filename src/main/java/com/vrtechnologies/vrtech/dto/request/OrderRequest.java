@@ -31,6 +31,7 @@ public class OrderRequest {
     private String contactEmail;
     private String deliveryAddress;
     private String deliveryState;
+    private String deliveryPostalCode;
     private String notes;
     private String couponCode;
     private List<OrderItemRequest> items;

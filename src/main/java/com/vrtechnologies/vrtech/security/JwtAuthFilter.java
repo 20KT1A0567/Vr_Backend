@@ -1,5 +1,7 @@
 package com.vrtechnologies.vrtech.security;
 
+import com.vrtechnologies.vrtech.entity.AuthSession;
+import com.vrtechnologies.vrtech.repository.AuthSessionRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -15,16 +17,20 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.util.Optional;
 
 @Component
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final CustomUserDetailsService userDetailsService;
+    private final AuthSessionRepository authSessionRepository;
 
-    public JwtAuthFilter(JwtService jwtService, CustomUserDetailsService userDetailsService) {
+    public JwtAuthFilter(JwtService jwtService, CustomUserDetailsService userDetailsService, AuthSessionRepository authSessionRepository) {
         this.jwtService = jwtService;
         this.userDetailsService = userDetailsService;
+        this.authSessionRepository = authSessionRepository;
     }
 
     @Override
@@ -63,9 +69,50 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     );
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authentication);
+                    
                     Long sessionId = jwtService.extractSessionId(token);
                     if (sessionId != null) {
                         request.setAttribute("currentSessionId", sessionId);
+
+                        // Active Session & Device Hijacking Validation
+                        Optional<AuthSession> sessionOpt = authSessionRepository.findById(sessionId);
+                        if (sessionOpt.isEmpty() || !sessionOpt.get().isActive()) {
+                            SecurityContextHolder.clearContext();
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"message\":\"Session has been revoked or expired. Please sign in again.\"}");
+                            return;
+                        }
+
+                        AuthSession session = sessionOpt.get();
+                        String currentUa = request.getHeader("User-Agent");
+                        String currentIp = clientIp(request);
+
+                        String storedUa = session.getUserAgent();
+                        String storedIp = session.getIpAddress();
+
+                        boolean uaMatch = storedUa == null || storedUa.equals(currentUa);
+                        boolean ipMatch = true;
+
+                        if (storedIp != null && currentIp != null && !storedIp.equals(currentIp)) {
+                            // Check if first 2 segments of IP match (dynamic IP subnet check)
+                            String[] storedParts = storedIp.split("\\.");
+                            String[] currentParts = currentIp.split("\\.");
+                            if (storedParts.length >= 2 && currentParts.length >= 2) {
+                                ipMatch = storedParts[0].equals(currentParts[0]) && storedParts[1].equals(currentParts[1]);
+                            }
+                        }
+
+                        if (!uaMatch || !ipMatch) {
+                            // Session compromised - Auto-revoke and block request
+                            session.setRevokedAt(LocalDateTime.now());
+                            authSessionRepository.save(session);
+                            SecurityContextHolder.clearContext();
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"message\":\"Security compromise detected: Session accessed from a different device or subnet.\"}");
+                            return;
+                        }
                     }
                 }
             } catch (UsernameNotFoundException ignored) {
@@ -74,5 +121,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    private String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 }

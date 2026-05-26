@@ -33,6 +33,8 @@ import com.vrtechnologies.vrtech.repository.AdminStoreAccessRepository;
 import com.vrtechnologies.vrtech.repository.RolePermissionRepository;
 import com.vrtechnologies.vrtech.repository.StoreRepository;
 import com.vrtechnologies.vrtech.repository.UserRepository;
+import com.vrtechnologies.vrtech.repository.UserPasswordHistoryRepository;
+import com.vrtechnologies.vrtech.entity.UserPasswordHistory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -67,6 +69,7 @@ public class SuperAdminService {
     private final AdminActivityLogService activityLogService;
     private final AdminLoginHistoryService loginHistoryService;
     private final PermissionService permissionService;
+    private final UserPasswordHistoryRepository passwordHistoryRepository;
 
     public SuperAdminService(
             UserRepository userRepository,
@@ -79,7 +82,8 @@ public class SuperAdminService {
             UserContextService userContextService,
             AdminActivityLogService activityLogService,
             AdminLoginHistoryService loginHistoryService,
-            PermissionService permissionService
+            PermissionService permissionService,
+            UserPasswordHistoryRepository passwordHistoryRepository
     ) {
         this.userRepository = userRepository;
         this.storeRepository = storeRepository;
@@ -92,6 +96,7 @@ public class SuperAdminService {
         this.activityLogService = activityLogService;
         this.loginHistoryService = loginHistoryService;
         this.permissionService = permissionService;
+        this.passwordHistoryRepository = passwordHistoryRepository;
     }
 
     @Transactional(readOnly = true)
@@ -108,6 +113,7 @@ public class SuperAdminService {
         }
         validateAccessWindow(request.getAccessStartDate(), request.getAccessEndDate());
         validateLoginWindow(request.getAllowedLoginStartTime(), request.getAllowedLoginEndTime());
+        validatePasswordStrength(request.getPassword());
 
         User actor = userContextService.getCurrentUser();
 
@@ -115,7 +121,8 @@ public class SuperAdminService {
         user.setName(request.getFullName().trim());
         user.setEmail(request.getEmail().trim().toLowerCase(Locale.ROOT));
         user.setPhone(normalizePhone(request.getPhone()));
-        user.setPassword(passwordEncoder.encode(request.getPassword()));
+        String encodedPassword = passwordEncoder.encode(request.getPassword());
+        user.setPassword(encodedPassword);
         user.setRole(role);
         user.setAdminRoleKey(assignedRole.getRoleKey());
         user.setActive(true);
@@ -134,6 +141,7 @@ public class SuperAdminService {
         user.setCreatedBy(actor.getId());
 
         user = userRepository.save(user);
+        recordPasswordHistory(user.getId(), encodedPassword);
 
         if (request.getStoreIds() != null && !request.getStoreIds().isEmpty()) {
             assignStores(user, request.getStoreIds());
@@ -232,8 +240,12 @@ public class SuperAdminService {
     public void resetPassword(Long id, AdminPasswordResetRequest request) {
         User user = mustGet(id);
         User actor = userContextService.getCurrentUser();
-        user.setPassword(passwordEncoder.encode(request.getPassword()));
+        validatePasswordStrength(request.getPassword());
+        validatePasswordHistory(user.getId(), request.getPassword());
+        String encodedPassword = passwordEncoder.encode(request.getPassword());
+        user.setPassword(encodedPassword);
         userRepository.save(user);
+        recordPasswordHistory(user.getId(), encodedPassword);
         activityLogService.log(actor, Module.ADMINS, PermissionAction.UPDATE, "User", user.getId(),
                 null, null, "Password reset for " + user.getEmail());
     }
@@ -690,6 +702,50 @@ public class SuperAdminService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private void validatePasswordStrength(String password) {
+        if (password == null || password.length() < 12) {
+            throw new BadRequestException("Password must be at least 12 characters long.");
+        }
+        boolean hasUpper = false;
+        boolean hasLower = false;
+        boolean hasDigit = false;
+        boolean hasSpecial = false;
+        String specialChars = "!@#$%^&*()-_=+[]{}|;:',.<>?/~`\"";
+
+        for (char c : password.toCharArray()) {
+            if (Character.isUpperCase(c)) hasUpper = true;
+            else if (Character.isLowerCase(c)) hasLower = true;
+            else if (Character.isDigit(c)) hasDigit = true;
+            else if (specialChars.indexOf(c) >= 0) hasSpecial = true;
+        }
+
+        if (!hasUpper || !hasLower || !hasDigit || !hasSpecial) {
+            throw new BadRequestException("Password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character.");
+        }
+    }
+
+    private void validatePasswordHistory(Long userId, String newPassword) {
+        List<UserPasswordHistory> history = passwordHistoryRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        for (UserPasswordHistory past : history) {
+            if (passwordEncoder.matches(newPassword, past.getPasswordHash())) {
+                throw new BadRequestException("You cannot reuse any of your last 3 passwords.");
+            }
+        }
+    }
+
+    private void recordPasswordHistory(Long userId, String newPasswordHash) {
+        List<UserPasswordHistory> history = passwordHistoryRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        if (history.size() >= 3) {
+            for (int i = 2; i < history.size(); i++) {
+                passwordHistoryRepository.delete(history.get(i));
+            }
+        }
+        UserPasswordHistory entry = new UserPasswordHistory();
+        entry.setUserId(userId);
+        entry.setPasswordHash(newPasswordHash);
+        passwordHistoryRepository.save(entry);
     }
 
     private AdminLoginHistoryResponse toLoginHistoryResponse(com.vrtechnologies.vrtech.entity.AdminLoginHistory entry) {

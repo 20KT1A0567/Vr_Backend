@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 public class OrderController {
@@ -84,6 +85,12 @@ public class OrderController {
     @PostMapping("/api/users/orders/{id}/verify-payment")
     public ApiResponse<OrderResponse> verifyPayment(@PathVariable Long id, @Valid @RequestBody PaymentVerificationRequest request) {
         return ApiResponse.ok("Payment verified", orderService.verifyPayment(id, request));
+    }
+
+    @PostMapping("/api/users/orders/{id}/payment-failed")
+    public ApiResponse<OrderResponse> markPaymentFailed(@PathVariable Long id, @RequestBody(required = false) Map<String, String> request) {
+        String reason = request == null ? null : request.get("reason");
+        return ApiResponse.ok("Payment marked failed", orderService.markPaymentFailed(id, reason));
     }
 
     @PatchMapping("/api/users/orders/{id}/cancel")

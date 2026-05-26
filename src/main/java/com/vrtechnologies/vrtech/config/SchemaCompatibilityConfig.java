@@ -163,6 +163,11 @@ public class SchemaCompatibilityConfig {
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS holidays (id BIGINT NOT NULL AUTO_INCREMENT, holiday_date DATE NOT NULL UNIQUE, name VARCHAR(120) NOT NULL, active BIT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id))");
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS pincode_lookup_logs (id BIGINT NOT NULL AUTO_INCREMENT, pincode VARCHAR(6) NOT NULL, state_name VARCHAR(80) NULL, district_name VARCHAR(120) NULL, city_name VARCHAR(120) NULL, serviceable BIT NOT NULL, rule_source VARCHAR(32) NOT NULL, created_at DATETIME NOT NULL, PRIMARY KEY (id))");
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS pincode_api_cache (pincode VARCHAR(6) NOT NULL, state_name VARCHAR(80) NOT NULL, district_name VARCHAR(120) NOT NULL, city_name VARCHAR(120) NOT NULL, created_at DATETIME NOT NULL, PRIMARY KEY (pincode))");
+
+            // Advanced Security Schema updates
+            migrate(jdbcTemplate, "ALTER TABLE users ADD COLUMN totp_secret VARCHAR(32) NULL");
+            migrate(jdbcTemplate, "ALTER TABLE site_settings ADD COLUMN admin_allowed_ips TEXT NULL");
+            migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS user_password_histories (id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NOT NULL, password_hash VARCHAR(255) NOT NULL, created_at DATETIME NOT NULL, PRIMARY KEY (id))");
         };
     }
 

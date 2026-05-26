@@ -83,6 +83,32 @@ public class AdminEmailOtpService {
         );
     }
 
+    @Transactional
+    public IssuedChallenge issueTotpChallenge(User admin, String ipAddress, String userAgent) {
+        otpRepository.deleteByUserId(admin.getId());
+
+        String challengeId = java.util.UUID.randomUUID().toString();
+        LocalDateTime now = LocalDateTime.now();
+
+        AdminEmailOtp otp = new AdminEmailOtp();
+        otp.setChallengeId(challengeId);
+        otp.setUserId(admin.getId());
+        otp.setEmail(admin.getEmail());
+        otp.setCodeHash("TOTP-CHALLENGE");
+        otp.setExpiresAt(now.plusMinutes(Math.max(1, ttlMinutes)));
+        otp.setLastSentAt(now);
+        otp.setIpAddress(ipAddress);
+        otp.setUserAgent(userAgent);
+        otpRepository.save(otp);
+
+        return new IssuedChallenge(
+                challengeId,
+                "TOTP",
+                Math.max(60, ttlMinutes * 60),
+                Math.max(15, resendCooldownSeconds)
+        );
+    }
+
     @Transactional(readOnly = true)
     public Long peekUserId(String challengeId) {
         return otpRepository.findByChallengeId(challengeId)

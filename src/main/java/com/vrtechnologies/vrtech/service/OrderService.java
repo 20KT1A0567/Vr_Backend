@@ -61,11 +61,13 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 @Service
 public class OrderService {
 
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() { };
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
 
     private final CustomerOrderRepository customerOrderRepository;
     private final CartItemRepository cartItemRepository;
@@ -181,7 +183,7 @@ public class OrderService {
         order.setStatus(OrderStatus.PENDING);
         order.setContactName(trimToNull(request.getContactName()));
         order.setContactPhone(trimToNull(request.getContactPhone()));
-        order.setContactEmail(trimToNull(request.getContactEmail()));
+        order.setContactEmail(sanitizeContactEmail(request.getContactEmail()));
         order.setDeliveryAddress(trimToNull(request.getDeliveryAddress()));
         order.setDeliveryState(trimToNull(request.getDeliveryState()));
         order.setDeliveryPostalCode(trimToNull(request.getDeliveryPostalCode()));
@@ -224,7 +226,9 @@ public class OrderService {
         CustomerOrder saved = customerOrderRepository.save(order);
         ensureOrderIdentifiers(saved);
         cartItemRepository.deleteByUserId(user.getId());
-        notificationService.logOrderEvent("ORDER_PLACED", saved, "Order placed", "Your order " + saved.getOrderNumber() + " has been placed.");
+        if (!isOnlinePaymentMethod(saved.getPaymentMethod())) {
+            notificationService.logOrderEvent("ORDER_PLACED", saved, "Order placed", "Your order " + saved.getOrderNumber() + " has been placed.");
+        }
 
         orderTimelineService.record(
                 saved,
@@ -293,7 +297,7 @@ public class OrderService {
         order.setStatus(OrderStatus.PENDING);
         order.setContactName(trimToNull(request.getContactName()));
         order.setContactPhone(trimToNull(request.getContactPhone()));
-        order.setContactEmail(trimToNull(request.getContactEmail()));
+        order.setContactEmail(sanitizeContactEmail(request.getContactEmail()));
         order.setDeliveryAddress(trimToNull(request.getDeliveryAddress()));
         order.setDeliveryState(trimToNull(request.getDeliveryState()));
         order.setDeliveryPostalCode(trimToNull(request.getDeliveryPostalCode()));
@@ -335,7 +339,9 @@ public class OrderService {
 
         CustomerOrder saved = customerOrderRepository.save(order);
         ensureOrderIdentifiers(saved);
-        notificationService.logOrderEvent("GUEST_ORDER_PLACED", saved, "Guest order placed", "Your order " + saved.getOrderNumber() + " has been placed.");
+        if (!isOnlinePaymentMethod(saved.getPaymentMethod())) {
+            notificationService.logOrderEvent("GUEST_ORDER_PLACED", saved, "Guest order placed", "Your order " + saved.getOrderNumber() + " has been placed.");
+        }
         orderTimelineService.record(saved, OrderTimelineEventType.PLACED, "Guest order placed", "Guest checkout order was created.", null, "WEBSITE");
         return toResponse(saved);
     }
@@ -355,7 +361,7 @@ public class OrderService {
         return CheckoutProfileResponse.builder()
                 .contactName(defaultString(trimToNull(user.getPreferredContactName()), trimToNull(user.getName())))
                 .contactPhone(defaultString(trimToNull(user.getPreferredContactPhone()), trimToNull(user.getPhone())))
-                .contactEmail(defaultString(trimToNull(user.getPreferredContactEmail()), trimToNull(user.getEmail())))
+                .contactEmail(defaultString(sanitizeContactEmail(user.getPreferredContactEmail()), sanitizeContactEmail(user.getEmail())))
                 .defaultDeliveryAddress(trimToNull(user.getPreferredDeliveryAddress()))
                 .savedAddresses(savedAddresses)
                 .build();
@@ -470,7 +476,7 @@ public class OrderService {
         Map<String, Object> notes = new LinkedHashMap<>();
         notes.put("orderId", order.getId());
         notes.put("orderNumber", order.getOrderNumber());
-        notes.put("customerEmail", order.getContactEmail());
+        notes.put("customerEmail", sanitizeContactEmail(order.getContactEmail()));
         notes.put("customerPhone", order.getContactPhone());
 
         String receipt = truncate(order.getOrderNumber() != null ? order.getOrderNumber() : "ORD-" + order.getId(), 40);
@@ -510,7 +516,7 @@ public class OrderService {
                 .merchantName(razorpayService.merchantName())
                 .description("Payment for order " + order.getOrderNumber())
                 .customerName(order.getContactName())
-                .customerEmail(order.getContactEmail())
+                .customerEmail(sanitizeContactEmail(order.getContactEmail()))
                 .customerPhone(order.getContactPhone())
                 .build();
     }
@@ -560,6 +566,42 @@ public class OrderService {
             );
         }
         notificationService.logOrderEvent("PAYMENT_SUCCESS", order, "Payment successful", "Payment for " + order.getOrderNumber() + " has been verified.");
+
+        return toResponse(order);
+    }
+
+    @Transactional
+    public OrderResponse markPaymentFailed(Long orderId, String reason) {
+        User user = userContextService.getCurrentUser();
+        CustomerOrder order = findOwnedOrder(user, orderId);
+        if (!isOnlinePaymentMethod(order.getPaymentMethod())) {
+            throw new BadRequestException("Cash orders do not have online payment attempts");
+        }
+        if (order.getPaymentStatus() == PaymentStatus.PAID) {
+            throw new BadRequestException("This order is already paid");
+        }
+
+        String failureReason = defaultString(trimToNull(reason), "Payment was not completed");
+        PaymentTransaction transaction = paymentTransactionRepository.findFirstByOrderIdOrderByCreatedAtDescIdDesc(order.getId()).orElse(null);
+        if (transaction != null && transaction.getStatus() != PaymentTransactionStatus.CAPTURED) {
+            transaction.setStatus(PaymentTransactionStatus.FAILED);
+            transaction.setFailureReason(failureReason);
+            paymentTransactionRepository.save(transaction);
+        }
+
+        order.setPaymentStatus(PaymentStatus.FAILED);
+        customerOrderRepository.save(order);
+        notificationService.logOrderEvent("PAYMENT_FAILED", order, "Payment failed", "Payment failed for " + order.getOrderNumber() + ".");
+
+        orderTimelineService.record(
+                order,
+                OrderTimelineEventType.PAYMENT_FAILED,
+                "Payment failed",
+                failureReason,
+                user,
+                "WEBSITE",
+                metadata("transactionId", transaction != null ? transaction.getId() : null)
+        );
 
         return toResponse(order);
     }
@@ -1286,7 +1328,7 @@ public class OrderService {
     private void updateUserCheckoutPreferences(User user, OrderRequest request) {
         user.setPreferredContactName(trimToNull(request.getContactName()));
         user.setPreferredContactPhone(trimToNull(request.getContactPhone()));
-        user.setPreferredContactEmail(trimToNull(request.getContactEmail()));
+        user.setPreferredContactEmail(sanitizeContactEmail(request.getContactEmail()));
         if (request.getDeliveryType() != null && request.getDeliveryType().name().equals("DELIVERY")) {
             user.setPreferredDeliveryAddress(trimToNull(request.getDeliveryAddress()));
         }
@@ -1845,6 +1887,26 @@ public class OrderService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String sanitizeContactEmail(String value) {
+        String email = trimToNull(value);
+        if (email == null) {
+            return null;
+        }
+        String normalized = email.toLowerCase(Locale.ROOT);
+        if (!EMAIL_PATTERN.matcher(normalized).matches()) {
+            return null;
+        }
+        int atIndex = normalized.lastIndexOf('@');
+        if (atIndex < 0 || atIndex == normalized.length() - 1) {
+            return null;
+        }
+        String domain = normalized.substring(atIndex + 1);
+        if (domain.endsWith(".local")) {
+            return null;
+        }
+        return email.trim();
     }
 
     private String digitsOnly(String value) {

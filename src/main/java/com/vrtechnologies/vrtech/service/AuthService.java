@@ -25,6 +25,7 @@ import com.vrtechnologies.vrtech.entity.enums.Role;
 import com.vrtechnologies.vrtech.exception.BadRequestException;
 import com.vrtechnologies.vrtech.repository.UserRepository;
 import com.vrtechnologies.vrtech.security.JwtService;
+import com.vrtechnologies.vrtech.security.TotpUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -150,26 +151,50 @@ public class AuthService {
         ensureUserCanAuthenticate(user);
 
         if (user.getRole() != Role.USER && requiresTwoFactor(user)) {
-            AdminEmailOtpService.IssuedChallenge challenge = adminEmailOtpService.issueChallenge(user, ipAddress, userAgent);
-            activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
-                    null, null, "Admin 2FA challenge issued: " + user.getEmail());
-            return LoginOutcome.twoFactor(TwoFactorChallengeResponse.builder()
-                    .challengeId(challenge.challengeId())
-                    .maskedEmail(challenge.maskedEmail())
-                    .expiresInSeconds(challenge.expiresInSeconds())
-                    .resendCooldownSeconds(challenge.resendCooldownSeconds())
-                    .message("A verification code has been sent to your email.")
-                    .build());
+            if (user.isTotpEnabled()) {
+                AdminEmailOtpService.IssuedChallenge challenge = adminEmailOtpService.issueTotpChallenge(user, ipAddress, userAgent);
+                activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
+                        null, null, "Admin TOTP challenge issued: " + user.getEmail());
+                return LoginOutcome.twoFactor(TwoFactorChallengeResponse.builder()
+                        .challengeId(challenge.challengeId())
+                        .maskedEmail(challenge.maskedEmail())
+                        .expiresInSeconds(challenge.expiresInSeconds())
+                        .resendCooldownSeconds(challenge.resendCooldownSeconds())
+                        .message("Please enter the code from your authenticator app.")
+                        .build());
+            } else {
+                AdminEmailOtpService.IssuedChallenge challenge = adminEmailOtpService.issueChallenge(user, ipAddress, userAgent);
+                activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
+                        null, null, "Admin email 2FA challenge issued: " + user.getEmail());
+                return LoginOutcome.twoFactor(TwoFactorChallengeResponse.builder()
+                        .challengeId(challenge.challengeId())
+                        .maskedEmail(challenge.maskedEmail())
+                        .expiresInSeconds(challenge.expiresInSeconds())
+                        .resendCooldownSeconds(challenge.resendCooldownSeconds())
+                        .message("A verification code has been sent to your email.")
+                        .build());
+            }
         }
 
         return LoginOutcome.authenticated(finalizeAdminLogin(user));
     }
 
     public AuthResponse verifyTwoFactor(TwoFactorVerifyRequest request) {
-        Long userId = adminEmailOtpService.verify(request.getChallengeId(), request.getCode());
+        Long userId = adminEmailOtpService.peekUserId(request.getChallengeId());
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BadRequestException("Account not found"));
         ensureUserCanAuthenticate(user);
+
+        if (user.isTotpEnabled()) {
+            boolean ok = TotpUtil.verifyCode(user.getTotpSecret(), request.getCode(), 1);
+            if (!ok) {
+                throw new BadRequestException("Invalid code. Please try again.");
+            }
+            adminEmailOtpService.invalidateChallenge(request.getChallengeId());
+        } else {
+            adminEmailOtpService.verify(request.getChallengeId(), request.getCode());
+        }
+
         return finalizeAdminLogin(user);
     }
 
@@ -519,6 +544,59 @@ public class AuthService {
     private boolean isInternalPhoneLoginEmail(User user) {
         String email = user.getEmail().toLowerCase(Locale.ROOT);
         String phone = user.getPhone() == null ? "" : user.getPhone().toLowerCase(Locale.ROOT);
-        return email.endsWith("@phone.anushabazaar.local") || (!phone.isBlank() && email.equals(phone));
+        if (!phone.isBlank() && email.equals(phone)) {
+            return true;
+        }
+        int atIndex = email.lastIndexOf('@');
+        if (atIndex < 0 || atIndex == email.length() - 1) {
+            return false;
+        }
+        String domain = email.substring(atIndex + 1);
+        return domain.endsWith(".local");
+    }
+
+    public java.util.Map<String, String> setupTotp() {
+        User user = userContextService.getCurrentUser();
+        String secretKey = TotpUtil.generateSecretKey();
+        user.setTotpSecret(secretKey);
+        userRepository.save(user);
+
+        String qrCodeUrl = TotpUtil.getQrCodeUrl(secretKey, user.getEmail(), "VR Technologies");
+
+        java.util.Map<String, String> response = new java.util.HashMap<>();
+        response.put("secret", secretKey);
+        response.put("qrCodeUrl", qrCodeUrl);
+        return response;
+    }
+
+    public void enableTotp(String code) {
+        User user = userContextService.getCurrentUser();
+        if (user.getTotpSecret() == null || user.getTotpSecret().isBlank()) {
+            throw new BadRequestException("TOTP setup has not been initialized. Please call setup first.");
+        }
+        boolean verified = TotpUtil.verifyCode(user.getTotpSecret(), code, 1);
+        if (!verified) {
+            throw new BadRequestException("Invalid verification code. Please try again.");
+        }
+        user.setTwoFactorEnabled(true);
+        userRepository.save(user);
+        activityLogService.log(user, Module.DASHBOARD, PermissionAction.UPDATE, "Auth", user.getId(),
+                "2FA=false", "2FA=true", "TOTP MFA enabled successfully");
+    }
+
+    public void disableTotp(String code) {
+        User user = userContextService.getCurrentUser();
+        if (user.getTotpSecret() == null || user.getTotpSecret().isBlank()) {
+            throw new BadRequestException("TOTP is not enabled.");
+        }
+        boolean verified = TotpUtil.verifyCode(user.getTotpSecret(), code, 1);
+        if (!verified) {
+            throw new BadRequestException("Invalid verification code. Please try again.");
+        }
+        user.setTwoFactorEnabled(false);
+        user.setTotpSecret(null);
+        userRepository.save(user);
+        activityLogService.log(user, Module.DASHBOARD, PermissionAction.UPDATE, "Auth", user.getId(),
+                "2FA=true", "2FA=false", "TOTP MFA disabled successfully");
     }
 }

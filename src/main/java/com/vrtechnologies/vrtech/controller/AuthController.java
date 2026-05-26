@@ -95,6 +95,25 @@ public class AuthController {
         return ApiResponse.ok("Current user", authService.me());
     }
 
+    @PostMapping("/2fa/totp/setup")
+    public ApiResponse<Object> setupTotp() {
+        return ApiResponse.ok("TOTP setup generated", authService.setupTotp());
+    }
+
+    @PostMapping("/2fa/totp/enable")
+    public ApiResponse<Object> enableTotp(@org.springframework.web.bind.annotation.RequestBody java.util.Map<String, String> payload) {
+        String code = payload.get("code");
+        authService.enableTotp(code);
+        return ApiResponse.ok("TOTP multi-factor authentication enabled", null);
+    }
+
+    @PostMapping("/2fa/totp/disable")
+    public ApiResponse<Object> disableTotp(@org.springframework.web.bind.annotation.RequestBody java.util.Map<String, String> payload) {
+        String code = payload.get("code");
+        authService.disableTotp(code);
+        return ApiResponse.ok("TOTP multi-factor authentication disabled", null);
+    }
+
     private String clientIp(HttpServletRequest http) {
         if (http == null) return null;
         String forwarded = http.getHeader("X-Forwarded-For");

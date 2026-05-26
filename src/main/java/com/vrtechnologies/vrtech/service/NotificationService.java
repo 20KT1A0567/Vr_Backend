@@ -16,11 +16,14 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 @Service
 public class NotificationService {
 
     private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
 
     private final NotificationLogRepository notificationLogRepository;
     private final EmailService emailService;
@@ -78,6 +81,10 @@ public class NotificationService {
         if (recipient == null || recipient.isBlank()) {
             return null;
         }
+        if ("EMAIL".equalsIgnoreCase(channel) && !isDeliverableEmail(recipient)) {
+            log.info("Skipping email notification {} for non-email recipient {}", eventType, recipient);
+            return null;
+        }
         NotificationLog entry = new NotificationLog();
         entry.setEventType(eventType);
         entry.setChannel(channel);
@@ -90,6 +97,19 @@ public class NotificationService {
         entry.setMaxAttempts(3);
         entry.setNextAttemptAt(LocalDateTime.now());
         return notificationLogRepository.save(entry);
+    }
+
+    private boolean isDeliverableEmail(String recipient) {
+        String normalized = recipient.trim().toLowerCase(Locale.ROOT);
+        if (!EMAIL_PATTERN.matcher(normalized).matches()) {
+            return false;
+        }
+        int atIndex = normalized.lastIndexOf('@');
+        if (atIndex < 0 || atIndex == normalized.length() - 1) {
+            return false;
+        }
+        String domain = normalized.substring(atIndex + 1);
+        return !domain.endsWith(".local");
     }
 
     public NotificationLog logInApp(String eventType, String subject, String message, Long orderId) {
@@ -139,6 +159,10 @@ public class NotificationService {
     }
 
     private void deliverEmail(NotificationLog entry) {
+        if (!isDeliverableEmail(entry.getRecipient())) {
+            markUnsupported(entry, "Recipient is not a deliverable email address");
+            return;
+        }
         if (!emailService.isConfigured()) {
             markUnsupported(entry, "Email sender is not configured");
             return;

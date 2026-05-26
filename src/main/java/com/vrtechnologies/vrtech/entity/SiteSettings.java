@@ -148,4 +148,7 @@ public class SiteSettings extends BaseEntity {
 
     @Column(name = "security_notice", columnDefinition = "TEXT")
     private String securityNotice;
+
+    @Column(name = "admin_allowed_ips", columnDefinition = "TEXT")
+    private String adminAllowedIps;
 }

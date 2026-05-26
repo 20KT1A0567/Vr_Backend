@@ -131,6 +131,14 @@ public class UserProfileService {
     private boolean isInternalPhoneLoginEmail(User user) {
         String email = user.getEmail().toLowerCase(Locale.ROOT);
         String phone = user.getPhone() == null ? "" : user.getPhone().toLowerCase(Locale.ROOT);
-        return email.endsWith("@phone.anushabazaar.local") || (!phone.isBlank() && email.equals(phone));
+        if (!phone.isBlank() && email.equals(phone)) {
+            return true;
+        }
+        int atIndex = email.lastIndexOf('@');
+        if (atIndex < 0 || atIndex == email.length() - 1) {
+            return false;
+        }
+        String domain = email.substring(atIndex + 1);
+        return domain.endsWith(".local");
     }
 }

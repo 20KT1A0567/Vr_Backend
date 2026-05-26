@@ -152,7 +152,15 @@ public class AdminEngagementService {
     private boolean isInternalPhoneLoginEmail(User user) {
         String email = user.getEmail().toLowerCase(java.util.Locale.ROOT);
         String phone = user.getPhone() == null ? "" : user.getPhone().toLowerCase(java.util.Locale.ROOT);
-        return email.endsWith("@phone.anushabazaar.local") || (!phone.isBlank() && email.equals(phone));
+        if (!phone.isBlank() && email.equals(phone)) {
+            return true;
+        }
+        int atIndex = email.lastIndexOf('@');
+        if (atIndex < 0 || atIndex == email.length() - 1) {
+            return false;
+        }
+        String domain = email.substring(atIndex + 1);
+        return domain.endsWith(".local");
     }
 
     private boolean canAccessProduct(List<Long> accessibleStoreIds, Product product) {

@@ -390,6 +390,7 @@ public class AdminService {
         settings.setPaymentNotificationsEnabled(request.getPaymentNotificationsEnabled() == null || request.getPaymentNotificationsEnabled());
         settings.setReturnNotificationsEnabled(request.getReturnNotificationsEnabled() == null || request.getReturnNotificationsEnabled());
         settings.setSecurityNotice(normalizeString(request.getSecurityNotice()));
+        settings.setAdminAllowedIps(normalizeString(request.getAdminAllowedIps()));
         return siteSettingsRepository.save(settings);
     }
 
@@ -446,7 +447,15 @@ public class AdminService {
     private boolean isInternalPhoneLoginEmail(User user) {
         String email = user.getEmail().toLowerCase(Locale.ROOT);
         String phone = user.getPhone() == null ? "" : user.getPhone().toLowerCase(Locale.ROOT);
-        return email.endsWith("@phone.anushabazaar.local") || (!phone.isBlank() && email.equals(phone));
+        if (!phone.isBlank() && email.equals(phone)) {
+            return true;
+        }
+        int atIndex = email.lastIndexOf('@');
+        if (atIndex < 0 || atIndex == email.length() - 1) {
+            return false;
+        }
+        String domain = email.substring(atIndex + 1);
+        return domain.endsWith(".local");
     }
 
     private List<DashboardOrderStatusResponse> buildOrderStatusBreakdown(List<CustomerOrder> orders) {

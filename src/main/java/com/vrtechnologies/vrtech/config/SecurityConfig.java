@@ -1,5 +1,6 @@
 package com.vrtechnologies.vrtech.config;
 
+import com.vrtechnologies.vrtech.security.IpWhitelistFilter;
 import com.vrtechnologies.vrtech.security.JwtAuthFilter;
 import com.vrtechnologies.vrtech.security.RateLimitFilter;
 import com.vrtechnologies.vrtech.security.RestAccessDeniedHandler;
@@ -38,6 +39,7 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
     private final RateLimitFilter rateLimitFilter;
+    private final IpWhitelistFilter ipWhitelistFilter;
     private final UserDetailsService userDetailsService;
     private final RestAuthenticationEntryPoint authenticationEntryPoint;
     private final RestAccessDeniedHandler accessDeniedHandler;
@@ -45,21 +47,13 @@ public class SecurityConfig {
     public SecurityConfig(
             JwtAuthFilter jwtAuthFilter,
             RateLimitFilter rateLimitFilter,
+            IpWhitelistFilter ipWhitelistFilter,
             UserDetailsService userDetailsService,
             RestAuthenticationEntryPoint authenticationEntryPoint,
             RestAccessDeniedHandler accessDeniedHandler
     ) {
         this.jwtAuthFilter = jwtAuthFilter;
         this.rateLimitFilter = rateLimitFilter;
-        this.userDetailsService = userDetailsService;
-        this.authenticationEntryPoint = authenticationEntryPoint;
-        this.accessDeniedHandler = accessDeniedHandler;
-    }
-
-    @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http
-                .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .exceptionHandling(exceptionHandling -> exceptionHandling
@@ -84,6 +78,7 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .authenticationProvider(authenticationProvider())
+                .addFilterBefore(ipWhitelistFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 

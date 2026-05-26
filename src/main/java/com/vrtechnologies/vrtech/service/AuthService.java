@@ -247,6 +247,11 @@ public class AuthService {
         return toAuthResponse(user, accessToken, sessionToken);
     }
 
+    /** Called by WebAuthnController after successful fingerprint/passkey verification. */
+    public AuthResponse loginAsUser(User user) {
+        return finalizeAdminLogin(user);
+    }
+
     private boolean requiresTwoFactor(User user) {
         if (user.isTwoFactorEnabled()) {
             return true;
@@ -528,6 +533,7 @@ public class AuthService {
             builder.permissions(List.of());
         }
 
+        builder.twoFactorEnabled(user.isTotpEnabled());
         return builder.build();
     }
 

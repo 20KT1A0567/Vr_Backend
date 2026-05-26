@@ -72,7 +72,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health").permitAll()
                         .requestMatchers(HttpMethod.GET, "/sitemap.xml", "/robots.txt").permitAll()
-                        .requestMatchers("/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/auth/logout", "/api/auth/phone/send", "/api/auth/phone/verify", "/api/auth/customer/firebase-login", "/api/auth/2fa/verify", "/api/auth/2fa/resend", "/api/auth/2fa/backup").permitAll()
+                        .requestMatchers("/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/auth/logout", "/api/auth/phone/send", "/api/auth/phone/verify", "/api/auth/customer/firebase-login", "/api/auth/2fa/verify", "/api/auth/2fa/resend", "/api/auth/2fa/backup", "/api/auth/webauthn/authenticate/begin", "/api/auth/webauthn/authenticate/finish", "/api/auth/webauthn/register/begin", "/api/auth/webauthn/register/finish").permitAll()
                         .requestMatchers("/api/payments/webhooks/razorpay").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/orders/guest", "/api/courier/webhooks/status").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()

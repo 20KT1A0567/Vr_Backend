@@ -11,4 +11,4 @@ CREATE TABLE IF NOT EXISTS webauthn_credentials (
     CONSTRAINT fk_webauthn_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
+CREATE INDEX idx_webauthn_user ON webauthn_credentials(user_id);

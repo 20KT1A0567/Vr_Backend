@@ -30,12 +30,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v3
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
+      - name: Set up Java 17 (Pre-installed)
+        run: |
+          echo "JAVA_HOME=${JAVA_HOME_17_X64}" >> $GITHUB_ENV
+          echo "PATH=${JAVA_HOME_17_X64}/bin:${PATH}" >> $GITHUB_ENV
 
       - name: Build JAR
         run: mvn clean package -DskipTests

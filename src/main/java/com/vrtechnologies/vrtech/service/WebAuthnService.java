@@ -20,9 +20,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class WebAuthnService {
 
-    private static final String RP_ID   = "localhost";   // Change to your production domain e.g. "admin.vrtechnologies.com"
-    private static final String RP_NAME = "VR Technologies Admin";
-
     private final WebAuthnCredentialRepository credentialRepo;
     private final UserRepository userRepository;
     private final RelyingParty relyingParty;
@@ -34,18 +31,20 @@ public class WebAuthnService {
 
     public WebAuthnService(WebAuthnCredentialRepository credentialRepo,
                            UserRepository userRepository,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           @org.springframework.beans.factory.annotation.Value("${app.webauthn.rp.id:localhost}") String rpId,
+                           @org.springframework.beans.factory.annotation.Value("${app.webauthn.rp.name:VR Technologies Admin}") String rpName) {
         this.credentialRepo = credentialRepo;
         this.userRepository = userRepository;
         this.objectMapper   = objectMapper;
 
-        RelyingPartyIdentity rpId = RelyingPartyIdentity.builder()
-                .id(RP_ID)
-                .name(RP_NAME)
+        RelyingPartyIdentity rpIdentity = RelyingPartyIdentity.builder()
+                .id(rpId)
+                .name(rpName)
                 .build();
 
         this.relyingParty = RelyingParty.builder()
-                .identity(rpId)
+                .identity(rpIdentity)
                 .credentialRepository(new VrCredentialRepository(credentialRepo, userRepository))
                 .allowOriginPort(true)
                 .allowOriginSubdomain(false)

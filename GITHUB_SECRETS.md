@@ -124,6 +124,10 @@ APP_WHATSAPP_BEARER_TOKEN=
 
 APP_WEBSITE_BASE_URL=https://vr.anushatechnologies.com
 
+# WebAuthn (Face / Fingerprint) configurations
+WEBAUTHN_RP_ID=myadmin.anushatechnologies.com
+WEBAUTHN_RP_NAME=VR Technologies Admin
+
 APP_RATE_LIMIT_WINDOW_SECONDS=60
 APP_RATE_LIMIT_MAX_REQUESTS=10
 

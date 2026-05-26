@@ -39,12 +39,20 @@ public class OrderController {
 
     @PostMapping("/api/orders/place")
     public ApiResponse<OrderResponse> placeOrder(@Valid @RequestBody OrderRequest request) {
-        return ApiResponse.ok("Order placed", orderService.placeOrder(request));
+        OrderResponse order = orderService.placeOrder(request);
+        String message = request.getPaymentMethod() != null && !"CASH".equals(request.getPaymentMethod().name())
+                ? "Payment pending"
+                : "Order placed";
+        return ApiResponse.ok(message, order);
     }
 
     @PostMapping("/api/orders/guest")
     public ApiResponse<OrderResponse> placeGuestOrder(@Valid @RequestBody OrderRequest request) {
-        return ApiResponse.ok("Guest order placed", orderService.placeGuestOrder(request));
+        OrderResponse order = orderService.placeGuestOrder(request);
+        String message = request.getPaymentMethod() != null && !"CASH".equals(request.getPaymentMethod().name())
+                ? "Payment pending"
+                : "Guest order placed";
+        return ApiResponse.ok(message, order);
     }
 
     @PostMapping("/api/courier/webhooks/status")

@@ -879,6 +879,18 @@ public class OrderService {
         return generateSimplePdf(order);
     }
 
+    public byte[] generateInvoiceWordForUser(Long orderId) {
+        User user = userContextService.getCurrentUser();
+        return generateInvoiceWord(findOwnedOrder(user, orderId));
+    }
+
+    public byte[] generateInvoiceWordForAdmin(User admin, Long orderId) {
+        CustomerOrder order = customerOrderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+        requireOrderAccess(admin, order);
+        return generateInvoiceWord(order);
+    }
+
     public List<PaymentWebhookEventResponse> getPaymentWebhookEvents(User admin) {
         permissionService.requirePermission(admin, Module.ORDERS, PermissionAction.VIEW);
         return paymentWebhookEventRepository.findTop200ByOrderByCreatedAtDescIdDesc().stream()
@@ -1723,63 +1735,603 @@ public class OrderService {
 
     private byte[] generateSimplePdf(CustomerOrder order) {
         ensureOrderIdentifiers(order);
-        List<String> lines = new ArrayList<>();
-        lines.add("VR Technologies Invoice");
-        lines.add("Invoice: " + defaultString(order.getInvoiceNumber(), "-"));
-        lines.add("Order: " + defaultString(order.getOrderNumber(), "-"));
-        lines.add("Customer: " + defaultString(order.getContactName(), "-"));
-        lines.add("Phone: " + defaultString(order.getContactPhone(), "-"));
-        lines.add("Payment: " + order.getPaymentStatus());
-        lines.add("Status: " + order.getStatus());
-        lines.add(" ");
-        for (OrderItem item : order.getItems()) {
-            lines.add(item.getProduct().getTitle() + " x " + item.getQuantity() + " = "
-                    + formatCurrency(item.getPriceAtTime().multiply(BigDecimal.valueOf(item.getQuantity()))));
-        }
-        lines.add(" ");
-        lines.add("Subtotal: " + formatCurrency(order.getSubtotalAmount()));
-        if (order.getDiscountAmount() != null && order.getDiscountAmount().compareTo(BigDecimal.ZERO) > 0) {
-            lines.add("Coupon " + order.getCouponCode() + ": -" + formatCurrency(order.getDiscountAmount()));
-        }
-        if (order.getTaxAmount() != null && order.getTaxAmount().compareTo(BigDecimal.ZERO) > 0) {
-            lines.add("GST: " + formatCurrency(order.getTaxAmount()));
-        }
-        if (order.getDeliveryCharge() != null && order.getDeliveryCharge().compareTo(BigDecimal.ZERO) > 0) {
-            lines.add("Delivery: " + formatCurrency(order.getDeliveryCharge()));
-        }
-        lines.add("Grand Total: " + formatCurrency(order.getTotalAmount()));
+        SiteSettings settings = siteSettingsRepository.findTopByOrderByIdAsc().orElseGet(SiteSettings::new);
+        String layout = settings.getInvoiceLayout() != null ? settings.getInvoiceLayout().toUpperCase() : "MINIMAL";
+        boolean gstEnabled = settings.isGstEnabled();
+        BigDecimal gstRate = settings.getGstRate() != null ? settings.getGstRate() : BigDecimal.valueOf(18);
+        String defaultHsn = settings.getDefaultHsnCode();
 
-        StringBuilder text = new StringBuilder("BT /F1 12 Tf 50 780 Td 16 TL ");
-        for (String line : lines) {
-            text.append("(").append(escapePdf(line)).append(") Tj T* ");
+        String companyName = defaultString(settings.getCompanyName(), "VR Technologies");
+        String companyCity = defaultString(settings.getDefaultCity(), "");
+        String companyState = defaultString(settings.getDefaultState(), "");
+        String termsText = defaultString(settings.getInvoiceTerms(), "Thank you for shopping with " + companyName + "!");
+        
+        String invoiceNum = defaultString(order.getInvoiceNumber(), "-");
+        String orderNum = defaultString(order.getOrderNumber(), "-");
+        String customerName = defaultString(order.getContactName(), "-");
+        String customerPhone = defaultString(order.getContactPhone(), "-");
+        String customerEmail = defaultString(order.getContactEmail(), "-");
+        String deliveryAddress = defaultString(order.getDeliveryType() != null && order.getDeliveryType().name().equals("DELIVERY") ? order.getDeliveryAddress() : "Store Pickup", "-");
+        String paymentStatus = order.getPaymentStatus() != null ? order.getPaymentStatus().name() : "PENDING";
+        String orderStatus = order.getStatus() != null ? order.getStatus().name() : "PENDING";
+        String dateStr = order.getCreatedAt() != null ? DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(order.getCreatedAt()) : "-";
+        
+        StringBuilder pdfStream = new StringBuilder();
+
+        // 1. Draw Graphics & Background Colors
+        if ("NEON".equals(layout)) {
+            // Background fill (charcoal almost black)
+            pdfStream.append("0.06 0.08 0.12 rg\n");
+            pdfStream.append("0 0 595 842 re f\n");
+            
+            // Border around the page
+            pdfStream.append("0 1 1 RG\n");
+            pdfStream.append("1 w\n");
+            pdfStream.append("30 30 535 782 re S\n");
+            
+            // Header card
+            pdfStream.append("0.09 0.13 0.2 rg\n");
+            pdfStream.append("40 720 515 90 re f\n");
+            pdfStream.append("40 720 515 90 re S\n");
+            
+            // Bill To and Fulfilment cards
+            pdfStream.append("45 595 240 100 re f\n");
+            pdfStream.append("45 595 240 100 re S\n");
+            pdfStream.append("310 595 240 100 re f\n");
+            pdfStream.append("310 595 240 100 re S\n");
+            
+            // Table Header background
+            pdfStream.append("0.08 0.12 0.18 rg\n");
+            pdfStream.append("40 565 515 20 re f\n");
+            pdfStream.append("40 565 515 20 re S\n");
+        } else if ("MODERN".equals(layout)) {
+            // Header card (deep indigo)
+            pdfStream.append("0.18 0.21 0.6 rg\n");
+            pdfStream.append("40 720 515 90 re f\n");
+            
+            // Bill To and Fulfilment cards
+            pdfStream.append("0.95 0.97 0.99 rg\n");
+            pdfStream.append("0.85 0.88 0.95 RG\n");
+            pdfStream.append("0.5 w\n");
+            pdfStream.append("45 595 240 100 re f\n");
+            pdfStream.append("45 595 240 100 re S\n");
+            pdfStream.append("310 595 240 100 re f\n");
+            pdfStream.append("310 595 240 100 re S\n");
+            
+            // Table Header background
+            pdfStream.append("0.92 0.94 0.98 rg\n");
+            pdfStream.append("40 565 515 20 re f\n");
+        } else {
+            // MINIMAL
+            // Header line
+            pdfStream.append("0.7 0.7 0.7 RG\n");
+            pdfStream.append("0.5 w\n");
+            pdfStream.append("50 710 m 545 710 l S\n");
         }
-        text.append("ET");
-        byte[] stream = text.toString().getBytes(StandardCharsets.US_ASCII);
+
+        // 2. Draw Text Content
+        // Header Left (Company Name, Tagline, Location)
+        if ("NEON".equals(layout)) {
+            pdfStream.append("BT\n/F2 16 Tf\n1 g\n55 780 Td\n(").append(escapePdf(companyName)).append(") Tj\n");
+            pdfStream.append("/F1 9 Tf\n0 1 1 rg\n0 -16 Td\n(").append(escapePdf(settings.getTagline() != null ? settings.getTagline() : "Refurbished. Warranted. Trusted.")).append(") Tj\n");
+            pdfStream.append("0.7 0.8 0.95 rg\n0 -14 Td\n(").append(escapePdf(companyCity + ", " + companyState)).append(") Tj\nET\n");
+            
+            // Header Right (TAX INVOICE, Inv #, Date)
+            pdfStream.append("BT\n/F2 12 Tf\n0 1 1 rg\n350 780 Td\n(TAX INVOICE) Tj\n");
+            pdfStream.append("/F1 9 Tf\n1 g\n0 -16 Td\n(Invoice: ").append(escapePdf(invoiceNum)).append(") Tj\n");
+            pdfStream.append("0 -14 Td\n(Order: ").append(escapePdf(orderNum)).append(") Tj\n");
+            pdfStream.append("0 -14 Td\n(Date: ").append(escapePdf(dateStr)).append(") Tj\nET\n");
+        } else if ("MODERN".equals(layout)) {
+            pdfStream.append("BT\n/F2 16 Tf\n1 g\n55 780 Td\n(").append(escapePdf(companyName)).append(") Tj\n");
+            pdfStream.append("/F1 9 Tf\n0 -16 Td\n(").append(escapePdf(settings.getTagline() != null ? settings.getTagline() : "Refurbished. Warranted. Trusted.")).append(") Tj\n");
+            pdfStream.append("0 -14 Td\n(").append(escapePdf(companyCity + ", " + companyState)).append(") Tj\nET\n");
+            
+            pdfStream.append("BT\n/F2 12 Tf\n1 g\n350 780 Td\n(TAX INVOICE) Tj\n");
+            pdfStream.append("/F1 9 Tf\n0 -16 Td\n(Invoice: ").append(escapePdf(invoiceNum)).append(") Tj\n");
+            pdfStream.append("0 -14 Td\n(Order: ").append(escapePdf(orderNum)).append(") Tj\n");
+            pdfStream.append("0 -14 Td\n(Date: ").append(escapePdf(dateStr)).append(") Tj\nET\n");
+        } else {
+            // MINIMAL
+            pdfStream.append("BT\n/F2 16 Tf\n0 g\n55 780 Td\n(").append(escapePdf(companyName)).append(") Tj\n");
+            pdfStream.append("/F1 9 Tf\n0.3 g\n0 -16 Td\n(").append(escapePdf(settings.getTagline() != null ? settings.getTagline() : "Refurbished. Warranted. Trusted.")).append(") Tj\n");
+            pdfStream.append("0 -14 Td\n(").append(escapePdf(companyCity + ", " + companyState)).append(") Tj\nET\n");
+            
+            pdfStream.append("BT\n/F2 12 Tf\n0 g\n350 780 Td\n(TAX INVOICE) Tj\n");
+            pdfStream.append("/F1 9 Tf\n0.3 g\n0 -16 Td\n(Invoice: ").append(escapePdf(invoiceNum)).append(") Tj\n");
+            pdfStream.append("0 -14 Td\n(Order: ").append(escapePdf(orderNum)).append(") Tj\n");
+            pdfStream.append("0 -14 Td\n(Date: ").append(escapePdf(dateStr)).append(") Tj\nET\n");
+        }
+
+        // Billing & Fulfilment information text columns
+        if ("NEON".equals(layout)) {
+            pdfStream.append("BT\n/F2 10 Tf\n0 1 1 rg\n55 675 Td\n(BILL TO:) Tj\n");
+            pdfStream.append("/F1 9 Tf\n1 g\n0 -14 Td\n(").append(escapePdf(customerName)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Phone: ").append(escapePdf(customerPhone)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Email: ").append(escapePdf(customerEmail)).append(") Tj\n");
+            String trimmedAddr = deliveryAddress.length() > 30 ? deliveryAddress.substring(0, 27) + "..." : deliveryAddress;
+            pdfStream.append("0 -12 Td\n(").append(escapePdf(trimmedAddr)).append(") Tj\nET\n");
+            
+            pdfStream.append("BT\n/F2 10 Tf\n0 1 1 rg\n320 675 Td\n(FULFILMENT & PAYMENT:) Tj\n");
+            pdfStream.append("/F1 9 Tf\n1 g\n0 -14 Td\n(Order Status: ").append(escapePdf(orderStatus)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Payment: ").append(escapePdf(paymentStatus)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Method: ").append(escapePdf(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "-")).append(") Tj\n");
+            String storeName = order.getStore() != null ? order.getStore().getName() : "Not assigned";
+            pdfStream.append("0 -12 Td\n(Store: ").append(escapePdf(storeName)).append(") Tj\nET\n");
+        } else if ("MODERN".equals(layout)) {
+            pdfStream.append("BT\n/F2 10 Tf\n0.18 0.21 0.6 rg\n55 675 Td\n(BILL TO:) Tj\n");
+            pdfStream.append("/F1 9 Tf\n0.09 0.12 0.2 rg\n0 -14 Td\n(").append(escapePdf(customerName)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Phone: ").append(escapePdf(customerPhone)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Email: ").append(escapePdf(customerEmail)).append(") Tj\n");
+            String trimmedAddr = deliveryAddress.length() > 30 ? deliveryAddress.substring(0, 27) + "..." : deliveryAddress;
+            pdfStream.append("0 -12 Td\n(").append(escapePdf(trimmedAddr)).append(") Tj\nET\n");
+            
+            pdfStream.append("BT\n/F2 10 Tf\n0.18 0.21 0.6 rg\n320 675 Td\n(FULFILMENT & PAYMENT:) Tj\n");
+            pdfStream.append("/F1 9 Tf\n0.09 0.12 0.2 rg\n0 -14 Td\n(Order Status: ").append(escapePdf(orderStatus)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Payment: ").append(escapePdf(paymentStatus)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Method: ").append(escapePdf(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "-")).append(") Tj\n");
+            String storeName = order.getStore() != null ? order.getStore().getName() : "Not assigned";
+            pdfStream.append("0 -12 Td\n(Store: ").append(escapePdf(storeName)).append(") Tj\nET\n");
+        } else {
+            // MINIMAL
+            pdfStream.append("BT\n/F2 10 Tf\n0 g\n55 675 Td\n(BILL TO:) Tj\n");
+            pdfStream.append("/F1 9 Tf\n0.3 g\n0 -14 Td\n(").append(escapePdf(customerName)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Phone: ").append(escapePdf(customerPhone)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Email: ").append(escapePdf(customerEmail)).append(") Tj\n");
+            String trimmedAddr = deliveryAddress.length() > 30 ? deliveryAddress.substring(0, 27) + "..." : deliveryAddress;
+            pdfStream.append("0 -12 Td\n(").append(escapePdf(trimmedAddr)).append(") Tj\nET\n");
+            
+            pdfStream.append("BT\n/F2 10 Tf\n0 g\n320 675 Td\n(FULFILMENT & PAYMENT:) Tj\n");
+            pdfStream.append("/F1 9 Tf\n0.3 g\n0 -14 Td\n(Order Status: ").append(escapePdf(orderStatus)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Payment: ").append(escapePdf(paymentStatus)).append(") Tj\n");
+            pdfStream.append("0 -12 Td\n(Method: ").append(escapePdf(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "-")).append(") Tj\n");
+            String storeName = order.getStore() != null ? order.getStore().getName() : "Not assigned";
+            pdfStream.append("0 -12 Td\n(Store: ").append(escapePdf(storeName)).append(") Tj\nET\n");
+        }
+
+        // Table Header labels
+        if ("NEON".equals(layout)) {
+            pdfStream.append("BT\n/F2 9 Tf\n0 1 1 rg\n");
+            pdfStream.append("55 571 Td (PRODUCT TITLE) Tj\n");
+            pdfStream.append("265 0 Td (HSN) Tj\n");
+            pdfStream.append("60 0 Td (QTY) Tj\n");
+            pdfStream.append("60 0 Td (UNIT PRICE) Tj\n");
+            pdfStream.append("55 0 Td (TOTAL) Tj\nET\n");
+        } else if ("MODERN".equals(layout)) {
+            pdfStream.append("BT\n/F2 9 Tf\n0.18 0.21 0.6 rg\n");
+            pdfStream.append("55 571 Td (PRODUCT TITLE) Tj\n");
+            pdfStream.append("265 0 Td (HSN) Tj\n");
+            pdfStream.append("60 0 Td (QTY) Tj\n");
+            pdfStream.append("60 0 Td (UNIT PRICE) Tj\n");
+            pdfStream.append("55 0 Td (TOTAL) Tj\nET\n");
+        } else {
+            // MINIMAL
+            pdfStream.append("BT\n/F2 9 Tf\n0 g\n");
+            pdfStream.append("55 571 Td (PRODUCT TITLE) Tj\n");
+            pdfStream.append("265 0 Td (HSN) Tj\n");
+            pdfStream.append("60 0 Td (QTY) Tj\n");
+            pdfStream.append("60 0 Td (UNIT PRICE) Tj\n");
+            pdfStream.append("55 0 Td (TOTAL) Tj\nET\n");
+        }
+
+        // Items Rows
+        int y = 545;
+        for (OrderItem item : order.getItems()) {
+            String title = item.getProduct().getTitle();
+            if (title.length() > 30) {
+                title = title.substring(0, 27) + "...";
+            }
+            String hsn = defaultString(item.getProduct().getHsnCode(), defaultString(defaultHsn, "-"));
+            BigDecimal lineTotal = item.getPriceAtTime().multiply(BigDecimal.valueOf(item.getQuantity()));
+            
+            if ("NEON".equals(layout)) {
+                pdfStream.append("BT\n/F1 9 Tf\n1 g\n55 ").append(y).append(" Td (").append(escapePdf(title)).append(") Tj\n");
+                pdfStream.append("265 0 Td (").append(escapePdf(hsn)).append(") Tj\n");
+                pdfStream.append("60 0 Td (").append(item.getQuantity()).append(") Tj\n");
+                pdfStream.append("60 0 Td (").append(escapePdf(formatCurrency(item.getPriceAtTime()))).append(") Tj\n");
+                pdfStream.append("55 0 Td (").append(escapePdf(formatCurrency(lineTotal))).append(") Tj\nET\n");
+            } else if ("MODERN".equals(layout)) {
+                pdfStream.append("BT\n/F1 9 Tf\n0.09 0.12 0.2 rg\n55 ").append(y).append(" Td (").append(escapePdf(title)).append(") Tj\n");
+                pdfStream.append("265 0 Td (").append(escapePdf(hsn)).append(") Tj\n");
+                pdfStream.append("60 0 Td (").append(item.getQuantity()).append(") Tj\n");
+                pdfStream.append("60 0 Td (").append(escapePdf(formatCurrency(item.getPriceAtTime()))).append(") Tj\n");
+                pdfStream.append("55 0 Td (").append(escapePdf(formatCurrency(lineTotal))).append(") Tj\nET\n");
+            } else {
+                pdfStream.append("BT\n/F1 9 Tf\n0 g\n55 ").append(y).append(" Td (").append(escapePdf(title)).append(") Tj\n");
+                pdfStream.append("265 0 Td (").append(escapePdf(hsn)).append(") Tj\n");
+                pdfStream.append("60 0 Td (").append(item.getQuantity()).append(") Tj\n");
+                pdfStream.append("60 0 Td (").append(escapePdf(formatCurrency(item.getPriceAtTime()))).append(") Tj\n");
+                pdfStream.append("55 0 Td (").append(escapePdf(formatCurrency(lineTotal))).append(") Tj\nET\n");
+            }
+            y -= 18;
+        }
+        
+        int tableBottom = y + 8;
+        // Bottom Table rule
+        if ("NEON".equals(layout)) {
+            pdfStream.append("0 1 1 RG\n");
+            pdfStream.append("40 ").append(tableBottom).append(" m 555 ").append(tableBottom).append(" l S\n");
+        } else if ("MODERN".equals(layout)) {
+            pdfStream.append("0.18 0.21 0.6 RG\n");
+            pdfStream.append("40 ").append(tableBottom).append(" m 555 ").append(tableBottom).append(" l S\n");
+        } else {
+            pdfStream.append("0.7 0.7 0.7 RG\n");
+            pdfStream.append("50 ").append(tableBottom).append(" m 545 ").append(tableBottom).append(" l S\n");
+        }
+
+        // Totals Section
+        y = tableBottom - 20;
+        BigDecimal subtotal = order.getSubtotalAmount() != null ? order.getSubtotalAmount() : BigDecimal.ZERO;
+        BigDecimal discount = order.getDiscountAmount() != null ? order.getDiscountAmount() : BigDecimal.ZERO;
+        BigDecimal tax = order.getTaxAmount() != null ? order.getTaxAmount() : BigDecimal.ZERO;
+        BigDecimal delivery = order.getDeliveryCharge() != null ? order.getDeliveryCharge() : BigDecimal.ZERO;
+        BigDecimal grand = order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO;
+
+        List<String[]> totalsLines = new ArrayList<>();
+        totalsLines.add(new String[]{"Subtotal:", formatCurrency(subtotal)});
+        if (discount.compareTo(BigDecimal.ZERO) > 0) {
+            totalsLines.add(new String[]{"Discount:", "-" + formatCurrency(discount)});
+        }
+        if (gstEnabled && tax.compareTo(BigDecimal.ZERO) > 0) {
+            String companyStateLoc = defaultString(settings.getDefaultState(), "");
+            String customerStateLoc = defaultString(order.getDeliveryState(), "");
+            boolean interState = !companyStateLoc.isBlank() && !customerStateLoc.isBlank()
+                    && !companyStateLoc.equalsIgnoreCase(customerStateLoc);
+            if (interState) {
+                totalsLines.add(new String[]{"IGST @ " + formatPercent(gstRate) + ":", formatCurrency(tax)});
+            } else {
+                BigDecimal halfTax = tax.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                BigDecimal halfRate = gstRate.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+                totalsLines.add(new String[]{"CGST @ " + formatPercent(halfRate) + ":", formatCurrency(halfTax)});
+                totalsLines.add(new String[]{"SGST @ " + formatPercent(halfRate) + ":", formatCurrency(halfTax)});
+            }
+        }
+        if (delivery.compareTo(BigDecimal.ZERO) > 0) {
+            totalsLines.add(new String[]{"Delivery Charge:", formatCurrency(delivery)});
+        }
+
+        for (String[] line : totalsLines) {
+            if ("NEON".equals(layout)) {
+                pdfStream.append("BT\n/F1 9 Tf\n0.7 0.8 0.95 rg\n360 ").append(y).append(" Td (").append(escapePdf(line[0])).append(") Tj\n");
+                pdfStream.append("135 0 Td (").append(escapePdf(line[1])).append(") Tj\nET\n");
+            } else if ("MODERN".equals(layout)) {
+                pdfStream.append("BT\n/F1 9 Tf\n0.4 0.45 0.55 rg\n360 ").append(y).append(" Td (").append(escapePdf(line[0])).append(") Tj\n");
+                pdfStream.append("135 0 Td (").append(escapePdf(line[1])).append(") Tj\nET\n");
+            } else {
+                pdfStream.append("BT\n/F1 9 Tf\n0.3 g\n360 ").append(y).append(" Td (").append(escapePdf(line[0])).append(") Tj\n");
+                pdfStream.append("135 0 Td (").append(escapePdf(line[1])).append(") Tj\nET\n");
+            }
+            y -= 14;
+        }
+
+        // Grand Total row
+        y -= 5;
+        if ("NEON".equals(layout)) {
+            pdfStream.append("BT\n/F2 11 Tf\n0 1 1 rg\n360 ").append(y).append(" Td (GRAND TOTAL:) Tj\n");
+            pdfStream.append("135 0 Td (").append(escapePdf(formatCurrency(grand))).append(") Tj\nET\n");
+        } else if ("MODERN".equals(layout)) {
+            pdfStream.append("BT\n/F2 11 Tf\n0.18 0.21 0.6 rg\n360 ").append(y).append(" Td (GRAND TOTAL:) Tj\n");
+            pdfStream.append("135 0 Td (").append(escapePdf(formatCurrency(grand))).append(") Tj\nET\n");
+        } else {
+            pdfStream.append("BT\n/F2 11 Tf\n0 g\n360 ").append(y).append(" Td (GRAND TOTAL:) Tj\n");
+            pdfStream.append("135 0 Td (").append(escapePdf(formatCurrency(grand))).append(") Tj\nET\n");
+        }
+
+        // Terms & Conditions block
+        int termsStart = Math.min(y - 30, 160);
+        if ("NEON".equals(layout)) {
+            pdfStream.append("BT\n/F2 8 Tf\n0 1 1 rg\n55 ").append(termsStart).append(" Td (TERMS & CONDITIONS) Tj\nET\n");
+            int termY = termsStart - 12;
+            pdfStream.append("BT\n/F1 7 Tf\n10 TL\n0.7 0.8 0.95 rg\n55 ").append(termY).append(" Td\n");
+            String[] termsLines = termsText.split("\n");
+            for (String line : termsLines) {
+                if (line.trim().isEmpty()) continue;
+                pdfStream.append("(").append(escapePdf(line.trim())).append(") Tj T* ");
+            }
+            pdfStream.append("ET\n");
+        } else if ("MODERN".equals(layout)) {
+            pdfStream.append("BT\n/F2 8 Tf\n0.18 0.21 0.6 rg\n55 ").append(termsStart).append(" Td (TERMS & CONDITIONS) Tj\nET\n");
+            int termY = termsStart - 12;
+            pdfStream.append("BT\n/F1 7 Tf\n10 TL\n0.4 0.45 0.55 rg\n55 ").append(termY).append(" Td\n");
+            String[] termsLines = termsText.split("\n");
+            for (String line : termsLines) {
+                if (line.trim().isEmpty()) continue;
+                pdfStream.append("(").append(escapePdf(line.trim())).append(") Tj T* ");
+            }
+            pdfStream.append("ET\n");
+        } else {
+            pdfStream.append("BT\n/F2 8 Tf\n0 g\n55 ").append(termsStart).append(" Td (TERMS & CONDITIONS) Tj\nET\n");
+            int termY = termsStart - 12;
+            pdfStream.append("BT\n/F1 7 Tf\n10 TL\n0.3 g\n55 ").append(termY).append(" Td\n");
+            String[] termsLines = termsText.split("\n");
+            for (String line : termsLines) {
+                if (line.trim().isEmpty()) continue;
+                pdfStream.append("(").append(escapePdf(line.trim())).append(") Tj T* ");
+            }
+            pdfStream.append("ET\n");
+        }
+
+        // Thin footer divider
+        if ("NEON".equals(layout)) {
+            pdfStream.append("0 1 1 RG\n");
+            pdfStream.append("40 45 m 555 45 l S\n");
+            pdfStream.append("BT\n/F1 7 Tf\n0.7 0.8 0.95 rg\n55 30 Td (Digitally generated invoice by VR Technologies. Thank you for your business!) Tj\nET\n");
+        } else if ("MODERN".equals(layout)) {
+            pdfStream.append("0.85 0.88 0.95 RG\n");
+            pdfStream.append("40 45 m 555 45 l S\n");
+            pdfStream.append("BT\n/F1 7 Tf\n0.4 0.45 0.55 rg\n55 30 Td (Digitally generated invoice by VR Technologies. Thank you for your business!) Tj\nET\n");
+        } else {
+            pdfStream.append("0.7 0.7 0.7 RG\n");
+            pdfStream.append("50 45 m 545 45 l S\n");
+            pdfStream.append("BT\n/F1 7 Tf\n0.3 g\n55 30 Td (Digitally generated invoice by VR Technologies. Thank you for your business!) Tj\nET\n");
+        }
+
+        byte[] stream = pdfStream.toString().getBytes(StandardCharsets.UTF_8);
         String header = "%PDF-1.4\n";
         String obj1 = "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n";
         String obj2 = "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n";
-        String obj3 = "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n";
+        String obj3 = "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >> endobj\n";
         String obj4 = "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n";
-        String obj5Prefix = "5 0 obj << /Length " + stream.length + " >> stream\n";
-        String obj5Suffix = "\nendstream endobj\n";
-        String[] parts = {header, obj1, obj2, obj3, obj4, obj5Prefix, new String(stream, StandardCharsets.US_ASCII), obj5Suffix};
+        String obj5 = "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> endobj\n";
+        String obj6Prefix = "6 0 obj << /Length " + stream.length + " >> stream\n";
+        String obj6Suffix = "\nendstream endobj\n";
+        
+        String[] parts = {header, obj1, obj2, obj3, obj4, obj5, obj6Prefix, new String(stream, StandardCharsets.US_ASCII), obj6Suffix};
         StringBuilder body = new StringBuilder();
         List<Integer> offsets = new ArrayList<>();
-        int offset = header.length();
         body.append(header);
         for (int i = 1; i < parts.length; i++) {
-            if (i <= 5) {
+            if (i <= 6) {
                 offsets.add(body.length());
             }
             body.append(parts[i]);
         }
         int xref = body.length();
-        body.append("xref\n0 6\n0000000000 65535 f \n");
+        body.append("xref\n0 7\n0000000000 65535 f \n");
         for (Integer item : offsets) {
             body.append(String.format("%010d 00000 n \n", item));
         }
-        body.append("trailer << /Size 6 /Root 1 0 R >>\nstartxref\n").append(xref).append("\n%%EOF");
+        body.append("trailer << /Size 7 /Root 1 0 R >>\nstartxref\n").append(xref).append("\n%%EOF");
         return body.toString().getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private String generateInvoiceWordHtml(CustomerOrder order) {
+        SiteSettings settings = siteSettingsRepository.findTopByOrderByIdAsc().orElseGet(SiteSettings::new);
+        boolean gstEnabled = settings.isGstEnabled();
+        BigDecimal gstRate = settings.getGstRate() == null ? BigDecimal.ZERO : settings.getGstRate();
+        String defaultHsn = settings.getDefaultHsnCode();
+        String layout = settings.getInvoiceLayout() != null ? settings.getInvoiceLayout().toUpperCase() : "MINIMAL";
+
+        BigDecimal subtotal = order.getSubtotalAmount() == null ? BigDecimal.ZERO : order.getSubtotalAmount();
+        BigDecimal discount = order.getDiscountAmount() == null ? BigDecimal.ZERO : order.getDiscountAmount();
+        BigDecimal tax = order.getTaxAmount() == null ? BigDecimal.ZERO : order.getTaxAmount();
+        BigDecimal delivery = order.getDeliveryCharge() == null ? BigDecimal.ZERO : order.getDeliveryCharge();
+        BigDecimal grand = order.getTotalAmount() == null ? BigDecimal.ZERO : order.getTotalAmount();
+
+        String companyState = defaultString(settings.getDefaultState(), "");
+        String customerState = defaultString(order.getDeliveryState(), "");
+        boolean interState = !companyState.isBlank() && !customerState.isBlank()
+                && !companyState.equalsIgnoreCase(customerState);
+        BigDecimal halfTax = tax.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+
+        String taxBreakdown = "";
+        if (gstEnabled && tax.signum() > 0) {
+            if (interState) {
+                taxBreakdown = "<tr><td colspan='4' style='padding: 8px; text-align: right;'>IGST @ " + formatPercent(gstRate) + "</td><td style='padding: 8px; text-align: right;'>"
+                        + formatCurrency(tax) + "</td></tr>";
+            } else {
+                taxBreakdown = "<tr><td colspan='4' style='padding: 8px; text-align: right;'>CGST @ " + formatPercent(gstRate.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP)) + "</td><td style='padding: 8px; text-align: right;'>"
+                        + formatCurrency(halfTax) + "</td></tr>"
+                        + "<tr><td colspan='4' style='padding: 8px; text-align: right;'>SGST @ " + formatPercent(gstRate.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP)) + "</td><td style='padding: 8px; text-align: right;'>"
+                        + formatCurrency(halfTax) + "</td></tr>";
+            }
+        }
+
+        String companyName = defaultString(settings.getCompanyName(), "VR Technologies");
+        String companyAddressLine = defaultString(settings.getCompanyAddress(), "");
+        String companyCityState = String.join(", ",
+                List.of(
+                        defaultString(settings.getDefaultCity(), ""),
+                        defaultString(settings.getDefaultState(), ""),
+                        defaultString(settings.getCompanyPincode(), "")
+                ).stream().filter(s -> !s.isBlank()).toList());
+        String gstinLine = settings.getGstNumber() != null && !settings.getGstNumber().isBlank()
+                ? "GSTIN: " + escapeHtml(settings.getGstNumber()) : "";
+        String panLine = settings.getCompanyPan() != null && !settings.getCompanyPan().isBlank()
+                ? "PAN: " + escapeHtml(settings.getCompanyPan()) : "";
+        String supportLine = String.join(" · ",
+                List.of(
+                        defaultString(settings.getSupportEmail(), ""),
+                        defaultString(settings.getSupportPhone(), "")
+                ).stream().filter(s -> !s.isBlank()).toList());
+        String terms = settings.getInvoiceTerms() == null || settings.getInvoiceTerms().isBlank()
+                ? "Thank you for shopping with " + escapeHtml(companyName) + ". This invoice was generated digitally and is valid without a signature."
+                : escapeHtml(settings.getInvoiceTerms());
+
+        StringBuilder itemsHtml = new StringBuilder();
+        for (OrderItem item : order.getItems()) {
+            BigDecimal qty = BigDecimal.valueOf(item.getQuantity());
+            BigDecimal lineTotal = item.getPriceAtTime().multiply(qty);
+            String hsn = defaultString(item.getProduct().getHsnCode(), defaultString(defaultHsn, "-"));
+            itemsHtml.append("""
+                    <tr>
+                      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">%s</td>
+                      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">%s</td>
+                      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: center;">%s</td>
+                      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">%s</td>
+                      <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">%s</td>
+                    </tr>
+                    """.formatted(
+                    escapeHtml(item.getProduct().getTitle()),
+                    escapeHtml(hsn),
+                    item.getQuantity(),
+                    formatCurrency(item.getPriceAtTime()),
+                    formatCurrency(lineTotal)
+            ));
+        }
+
+        String bodyBg = "#ffffff";
+        String cardBg = "#f8fbff";
+        String textColor = "#0f172a";
+        String accentColor = "#1e3a8a";
+        String secondaryColor = "#475569";
+        String borderStyle = "border: 1px solid rgba(30, 58, 138, 0.08);";
+        String headerStyle = "background-color: #2F3699; color: #ffffff; padding: 24px; border-radius: 8px;";
+        String thStyle = "background-color: #f1f5f9; color: #1e3a8a; font-weight: bold; text-align: left; padding: 10px;";
+
+        if ("NEON".equals(layout)) {
+            bodyBg = "#0b0f19";
+            cardBg = "#131a2e";
+            textColor = "#f8fafc";
+            accentColor = "#00f0ff";
+            secondaryColor = "#94a3b8";
+            borderStyle = "border: 1px solid #00f0ff;";
+            headerStyle = "background-color: #172540; color: #00f0ff; padding: 24px; border: 1px solid #00f0ff; border-radius: 8px;";
+            thStyle = "background-color: #1e293b; color: #00f0ff; font-weight: bold; text-align: left; padding: 10px;";
+        } else if ("MINIMAL".equals(layout)) {
+            bodyBg = "#ffffff";
+            cardBg = "#ffffff";
+            textColor = "#000000";
+            accentColor = "#000000";
+            secondaryColor = "#333333";
+            borderStyle = "border: 1px solid #000000;";
+            headerStyle = "border-bottom: 2px solid #000000; padding: 20px 0;";
+            thStyle = "border-bottom: 2px solid #000000; font-weight: bold; text-align: left; padding: 10px; color: #000000;";
+        }
+
+        return """
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                  <meta charset="UTF-8" />
+                  <title>%s</title>
+                  <style>
+                    body { font-family: Arial, sans-serif; background-color: %s; color: %s; margin: 0; padding: 20px; }
+                    .wrap { max-width: 800px; margin: 0 auto; padding: 20px; background-color: %s; }
+                    .meta { font-size: 13px; color: %s; }
+                    .h1-style { font-size: 28px; font-weight: bold; margin: 10px 0; color: %s; }
+                    .h2-style { font-size: 16px; font-weight: bold; margin-bottom: 8px; color: %s; }
+                    .grid-table { width: 100%%; margin-top: 20px; border-collapse: collapse; }
+                    .card-cell { width: 50%%; padding: 15px; background-color: %s; %s vertical-align: top; border-radius: 6px; }
+                  </style>
+                </head>
+                <body>
+                  <div class="wrap">
+                    <div style="%s">
+                      <table style="width: 100%%; border-collapse: collapse;">
+                        <tr>
+                          <td>
+                            <div style="font-size: 11px; font-weight: bold; letter-spacing: 0.1em; color: %s; text-transform: uppercase;">%s</div>
+                            <div class="h1-style">%s</div>
+                            <div class="meta" style="color: %s;">Order: %s</div>
+                            <div class="meta" style="color: %s;">Issued: %s</div>
+                          </td>
+                          <td style="text-align: right; vertical-align: top;">
+                            <div class="h2-style" style="color: %s;">%s</div>
+                            <div class="meta" style="color: %s;">%s</div>
+                            <div class="meta" style="color: %s;">%s</div>
+                            <div class="meta" style="color: %s;">%s</div>
+                            %s
+                            %s
+                          </td>
+                        </tr>
+                      </table>
+                    </div>
+
+                    <table class="grid-table" style="margin-top: 20px;">
+                      <tr>
+                        <td class="card-cell">
+                          <div class="h2-style" style="color: %s;">Bill To</div>
+                          <div class="meta" style="color: %s; font-weight: bold;">%s</div>
+                          <div class="meta" style="color: %s;">%s</div>
+                          <div class="meta" style="color: %s;">%s</div>
+                          <div class="meta" style="color: %s;">%s</div>
+                        </td>
+                        <td style="width: 20px;"></td>
+                        <td class="card-cell">
+                          <div class="h2-style" style="color: %s;">Fulfilment</div>
+                          <div class="meta" style="color: %s;">Status: %s</div>
+                          <div class="meta" style="color: %s;">Payment: %s</div>
+                          <div class="meta" style="color: %s;">Method: %s</div>
+                          <div class="meta" style="color: %s;">Store: %s</div>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <table style="width: 100%%; border-collapse: collapse; margin-top: 30px;">
+                      <thead>
+                        <tr>
+                          <th style="%s">Product</th>
+                          <th style="%s">HSN/SAC</th>
+                          <th style="%s text-align: center;">Qty</th>
+                          <th style="%s text-align: right;">Unit Price</th>
+                          <th style="%s text-align: right;">Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        %s
+                      </tbody>
+                    </table>
+
+                    <table style="width: 300px; margin-left: auto; margin-top: 20px; border-collapse: collapse;">
+                      <tr>
+                        <td style="padding: 6px; font-size: 13px; color: %s;">Subtotal</td>
+                        <td style="padding: 6px; font-size: 13px; text-align: right; color: %s;">%s</td>
+                      </tr>
+                      %s
+                      %s
+                      %s
+                      %s
+                      <tr style="border-top: 2px solid %s;">
+                        <td style="padding: 8px 6px; font-size: 16px; font-weight: bold; color: %s;">Grand Total</td>
+                        <td style="padding: 8px 6px; font-size: 16px; font-weight: bold; text-align: right; color: %s;">%s</td>
+                      </tr>
+                    </table>
+
+                    <div style="margin-top: 40px; border-top: 1px solid #e2e8f0; padding-top: 20px; font-size: 12px; color: %s; line-height: 1.5;">
+                      <div style="font-weight: bold; margin-bottom: 5px; color: %s;">TERMS & CONDITIONS</div>
+                      %s
+                    </div>
+                  </div>
+                </body>
+                </html>
+                """.formatted(
+                escapeHtml(order.getInvoiceNumber()),
+                bodyBg, textColor, bodyBg, secondaryColor, accentColor, accentColor,
+                cardBg, borderStyle,
+                headerStyle,
+                accentColor,
+                gstEnabled ? "Tax Invoice" : "Invoice",
+                escapeHtml(companyName),
+                secondaryColor, escapeHtml(order.getOrderNumber()),
+                secondaryColor, DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a").format(order.getCreatedAt()),
+                accentColor, escapeHtml(companyName),
+                secondaryColor, escapeHtml(companyAddressLine.isBlank() ? "Refurbished systems marketplace" : companyAddressLine),
+                secondaryColor, escapeHtml(companyCityState),
+                secondaryColor, escapeHtml(supportLine),
+                gstinLine.isBlank() ? "" : "<div style='color: " + accentColor + "; font-size: 11px; font-weight: bold;'>" + gstinLine + "</div>",
+                panLine.isBlank() ? "" : "<div class='meta' style='color: " + secondaryColor + ";'>" + panLine + "</div>",
+                accentColor, secondaryColor, escapeHtml(defaultString(order.getContactName(), "Customer")),
+                secondaryColor, escapeHtml(defaultString(order.getContactPhone(), "-")),
+                secondaryColor, escapeHtml(defaultString(order.getContactEmail(), "-")),
+                secondaryColor, escapeHtml(defaultString(order.getDeliveryType() != null && order.getDeliveryType().name().equals("DELIVERY") ? order.getDeliveryAddress() : order.getStore() != null ? order.getStore().getAddress() : "-", "-")),
+                accentColor, secondaryColor, escapeHtml(order.getStatus().name()),
+                secondaryColor, escapeHtml(order.getPaymentStatus().name()),
+                secondaryColor, escapeHtml(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "-"),
+                secondaryColor, escapeHtml(order.getStore() != null ? order.getStore().getName() : "Not assigned"),
+                thStyle, thStyle, thStyle, thStyle, thStyle,
+                itemsHtml,
+                secondaryColor, textColor, formatCurrency(subtotal),
+                discount.signum() > 0 ? "<tr><td style='padding: 6px; font-size: 13px; color: " + secondaryColor + ";'>Discount</td><td style='padding: 6px; font-size: 13px; text-align: right; color: " + textColor + ";'>- " + formatCurrency(discount) + "</td></tr>" : "",
+                taxBreakdown,
+                delivery.signum() > 0 ? "<tr><td style='padding: 6px; font-size: 13px; color: " + secondaryColor + ";'>Delivery</td><td style='padding: 6px; font-size: 13px; text-align: right; color: " + textColor + ";'>" + formatCurrency(delivery) + "</td></tr>" : "",
+                "",
+                accentColor, accentColor, accentColor, formatCurrency(grand),
+                secondaryColor, accentColor, escapeHtml(terms)
+        );
+    }
+
+    public byte[] generateInvoiceWord(CustomerOrder order) {
+        return generateInvoiceWordHtml(order).getBytes(StandardCharsets.UTF_8);
     }
 
     private String escapePdf(String value) {

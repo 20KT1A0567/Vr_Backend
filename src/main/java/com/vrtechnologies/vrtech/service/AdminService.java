@@ -391,6 +391,14 @@ public class AdminService {
         settings.setReturnNotificationsEnabled(request.getReturnNotificationsEnabled() == null || request.getReturnNotificationsEnabled());
         settings.setSecurityNotice(normalizeString(request.getSecurityNotice()));
         settings.setAdminAllowedIps(normalizeString(request.getAdminAllowedIps()));
+        
+        if (request.getInvoiceLayout() != null) {
+            settings.setInvoiceLayout(request.getInvoiceLayout().trim().toUpperCase());
+        }
+        if (request.getInvoiceFormat() != null) {
+            settings.setInvoiceFormat(request.getInvoiceFormat().trim().toUpperCase());
+        }
+
         return siteSettingsRepository.save(settings);
     }
 

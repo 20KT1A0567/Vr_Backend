@@ -2,6 +2,8 @@ package com.vrtechnologies.vrtech.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vrtechnologies.vrtech.dto.event.SystemEvent;
+import com.vrtechnologies.vrtech.service.SseEmitterService;
 import com.vrtechnologies.vrtech.dto.request.ProductBulkActionRequest;
 import com.vrtechnologies.vrtech.dto.request.ProductImageRequest;
 import com.vrtechnologies.vrtech.dto.request.ProductRequest;
@@ -74,6 +76,7 @@ public class ProductService {
     private final PermissionService permissionService;
     private final AdminActivityLogService activityLogService;
     private final NotificationService notificationService;
+    private final SseEmitterService sseEmitterService;
 
     public ProductService(
             ProductRepository productRepository,
@@ -85,7 +88,8 @@ public class ProductService {
             CloudinaryService cloudinaryService,
             PermissionService permissionService,
             AdminActivityLogService activityLogService,
-            NotificationService notificationService
+            NotificationService notificationService,
+            SseEmitterService sseEmitterService
     ) {
         this.productRepository = productRepository;
         this.brandRepository = brandRepository;
@@ -97,6 +101,7 @@ public class ProductService {
         this.permissionService = permissionService;
         this.activityLogService = activityLogService;
         this.notificationService = notificationService;
+        this.sseEmitterService = sseEmitterService;
     }
 
     @Scheduled(fixedDelayString = "${app.low-stock-alerts.worker.delay-ms:900000}")
@@ -311,6 +316,29 @@ public class ProductService {
             activityLogService.log(admin, Module.PRODUCTS, PermissionAction.UPDATE, AUDIT_ENTITY_TYPE, saved.getId(),
                     encode(oldDiff), encode(newDiff), "Updated product: " + saved.getTitle()
                             + " — fields: " + String.join(", ", newDiff.keySet()));
+
+            // Live Price Sentinel / flash sales broadcast
+            if (newDiff.containsKey("price")) {
+                try {
+                    SystemEvent priceMutationEvent = SystemEvent.builder()
+                            .eventType("PRICE_MUTATION")
+                            .title("Dynamic Price Adjusted")
+                            .message("Laptop \"" + saved.getTitle() + "\" price adjusted to " + saved.getPrice() + " INR!")
+                            .severity("INFO")
+                            .payload(Map.of(
+                                    "productId", saved.getId(),
+                                    "title", saved.getTitle(),
+                                    "oldPrice", before.getOrDefault("price", saved.getPrice()),
+                                    "newPrice", saved.getPrice(),
+                                    "discountPercent", saved.getDiscountPercent() != null ? saved.getDiscountPercent() : 0
+                            ))
+                            .timestamp(LocalDateTime.now())
+                            .build();
+                    sseEmitterService.broadcast(priceMutationEvent);
+                } catch (Exception e) {
+                    // Suppress to prevent REST failure
+                }
+            }
         }
         return toProductResponse(saved);
     }

@@ -2,6 +2,8 @@ package com.vrtechnologies.vrtech.security;
 
 import com.vrtechnologies.vrtech.entity.AuthSession;
 import com.vrtechnologies.vrtech.repository.AuthSessionRepository;
+import com.vrtechnologies.vrtech.service.SseEmitterService;
+import com.vrtechnologies.vrtech.dto.event.SystemEvent;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,6 +21,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.Map;
 
 @Component
 public class JwtAuthFilter extends OncePerRequestFilter {
@@ -26,11 +29,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
     private final CustomUserDetailsService userDetailsService;
     private final AuthSessionRepository authSessionRepository;
+    private final SseEmitterService sseEmitterService;
 
-    public JwtAuthFilter(JwtService jwtService, CustomUserDetailsService userDetailsService, AuthSessionRepository authSessionRepository) {
+    public JwtAuthFilter(JwtService jwtService, CustomUserDetailsService userDetailsService, AuthSessionRepository authSessionRepository, SseEmitterService sseEmitterService) {
         this.jwtService = jwtService;
         this.userDetailsService = userDetailsService;
         this.authSessionRepository = authSessionRepository;
+        this.sseEmitterService = sseEmitterService;
     }
 
     @Override
@@ -43,12 +48,17 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         String authHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        String token = null;
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            token = authHeader.substring(7);
+        } else {
+            token = request.getParameter("token");
+        }
+
+        if (token == null || token.isBlank()) {
             filterChain.doFilter(request, response);
             return;
         }
-
-        String token = authHeader.substring(7);
         String username;
         try {
             username = jwtService.extractUsername(token);
@@ -107,6 +117,27 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                             // Session compromised - Auto-revoke and block request
                             session.setRevokedAt(LocalDateTime.now());
                             authSessionRepository.save(session);
+                            
+                            // Broadcast real-time threat alert
+                            try {
+                                SystemEvent securityAlert = SystemEvent.builder()
+                                        .eventType("SECURITY_ALERT")
+                                        .title("Session Compromise Blocked")
+                                        .message("Admin session " + session.getId() + " (" + session.getUserEmail() + ") was compromised and auto-revoked.")
+                                        .severity("CRITICAL")
+                                        .payload(Map.of(
+                                                "sessionId", session.getId(),
+                                                "adminEmail", session.getUserEmail(),
+                                                "incomingIp", currentIp,
+                                                "incomingUa", currentUa
+                                        ))
+                                        .timestamp(LocalDateTime.now())
+                                        .build();
+                                sseEmitterService.broadcast(securityAlert);
+                            } catch (Exception e) {
+                                // Suppress to ensure filtering flows smoothly
+                            }
+
                             SecurityContextHolder.clearContext();
                             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                             response.setContentType("application/json");

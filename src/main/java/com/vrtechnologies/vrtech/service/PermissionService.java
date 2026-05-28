@@ -56,9 +56,6 @@ public class PermissionService {
         if (admin.getRole() == Role.SUPER_ADMIN) {
             return true;
         }
-        if (action == PermissionAction.DELETE) {
-            return false;
-        }
 
         Boolean adminOverride = readAdminOverride(admin.getId(), module, action);
         if (adminOverride != null) {
@@ -108,7 +105,6 @@ public class PermissionService {
 
         rolePermissionRepository.findByRole(resolveRoleKey(admin)).forEach(permission -> applyOverride(base, permission.getModule(), permission.getAction(), permission.isGranted()));
         adminPermissionRepository.findByAdminId(admin.getId()).forEach(permission -> applyOverride(base, permission.getModule(), permission.getAction(), permission.isGranted()));
-        stripDeletePermissions(base);
         return base;
     }
 
@@ -126,7 +122,6 @@ public class PermissionService {
                         (a, b) -> a, LinkedHashMap::new));
 
         rolePermissionRepository.findByRole(role.getRoleKey()).forEach(permission -> applyOverride(base, permission.getModule(), permission.getAction(), permission.isGranted()));
-        stripDeletePermissions(base);
         return base;
     }
 
@@ -209,9 +204,5 @@ public class PermissionService {
         } else {
             actions.remove(action);
         }
-    }
-
-    private void stripDeletePermissions(Map<Module, EnumSet<PermissionAction>> permissions) {
-        permissions.values().forEach(actions -> actions.remove(PermissionAction.DELETE));
     }
 }

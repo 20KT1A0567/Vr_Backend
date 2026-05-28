@@ -59,4 +59,6 @@ public class SiteSettingsRequest {
     private Boolean returnNotificationsEnabled;
     private String securityNotice;
     private String adminAllowedIps;
+    private String invoiceLayout;
+    private String invoiceFormat;
 }

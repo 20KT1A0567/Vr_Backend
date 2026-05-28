@@ -700,15 +700,22 @@ public class AdminController {
         return ApiResponse.ok("Shipment updated", orderService.updateShipment(admin, id, request));
     }
 
-    @GetMapping(value = "/orders/{id}/invoice", produces = MediaType.APPLICATION_PDF_VALUE)
-    public ResponseEntity<byte[]> orderInvoice(@PathVariable Long id) {
+    @GetMapping(value = "/orders/{id}/invoice")
+    public ResponseEntity<byte[]> orderInvoice(@PathVariable Long id, @RequestParam(required = false) String format) {
         User admin = currentAdmin();
         requirePermission(admin, Module.ORDERS, PermissionAction.VIEW);
         OrderResponse order = orderService.getAdminOrder(admin, id);
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + order.getInvoiceNumber() + ".pdf\"")
-                .contentType(MediaType.APPLICATION_PDF)
-                .body(orderService.generateInvoicePdfForAdmin(admin, id));
+        if ("WORD".equalsIgnoreCase(format)) {
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + order.getInvoiceNumber() + ".doc\"")
+                    .contentType(MediaType.parseMediaType("application/msword"))
+                    .body(orderService.generateInvoiceWordForAdmin(admin, id));
+        } else {
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + order.getInvoiceNumber() + ".pdf\"")
+                    .contentType(MediaType.APPLICATION_PDF)
+                    .body(orderService.generateInvoicePdfForAdmin(admin, id));
+        }
     }
 
     @GetMapping("/returns")

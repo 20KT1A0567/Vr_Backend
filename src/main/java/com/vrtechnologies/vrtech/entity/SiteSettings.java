@@ -151,4 +151,10 @@ public class SiteSettings extends BaseEntity {
 
     @Column(name = "admin_allowed_ips", columnDefinition = "TEXT")
     private String adminAllowedIps;
+
+    @Column(name = "invoice_layout", length = 30, nullable = false)
+    private String invoiceLayout = "MINIMAL";
+
+    @Column(name = "invoice_format", length = 30, nullable = false)
+    private String invoiceFormat = "PDF";
 }

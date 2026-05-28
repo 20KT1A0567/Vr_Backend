@@ -276,9 +276,6 @@ public class SuperAdminService {
                 if (entry.getModule() == null || entry.getAction() == null) {
                     continue;
                 }
-                if (user.getRole() != Role.SUPER_ADMIN && entry.getAction() == PermissionAction.DELETE) {
-                    continue;
-                }
                 AdminPermission permission = new AdminPermission();
                 permission.setAdminId(id);
                 permission.setModule(entry.getModule());
@@ -318,7 +315,7 @@ public class SuperAdminService {
         return loginHistoryService.all(pageable).map(this::toLoginHistoryResponse);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public RolePermissionsResponse createRole(AdminRoleCreateRequest request) {
         String roleKey = normalizeRoleKey(request.getRoleKey());
         if (adminRoleRepository.existsById(roleKey)) {
@@ -437,9 +434,6 @@ public class SuperAdminService {
         if (request.getPermissions() != null) {
             for (RolePermissionsRequest.Entry entry : request.getPermissions()) {
                 if (entry.getModule() == null || entry.getAction() == null) {
-                    continue;
-                }
-                if (entry.getAction() == PermissionAction.DELETE) {
                     continue;
                 }
                 RolePermission permission = new RolePermission();

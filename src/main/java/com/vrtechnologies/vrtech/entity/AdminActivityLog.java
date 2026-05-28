@@ -70,4 +70,10 @@ public class AdminActivityLog {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    @Column(name = "current_hash", length = 64)
+    private String currentHash = "";
+
+    @Column(name = "previous_hash", length = 64)
+    private String previousHash = "";
 }

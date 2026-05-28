@@ -21,4 +21,6 @@ public interface AdminActivityLogRepository extends JpaRepository<AdminActivityL
                                         Pageable pageable);
 
     long countByCreatedAtAfter(LocalDateTime createdAt);
+
+    java.util.Optional<AdminActivityLog> findFirstByOrderByIdDesc();
 }

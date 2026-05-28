@@ -1,5 +1,6 @@
 package com.vrtechnologies.vrtech.service;
 
+import com.vrtechnologies.vrtech.dto.event.SystemEvent;
 import com.vrtechnologies.vrtech.entity.AdminActivityLog;
 import com.vrtechnologies.vrtech.entity.User;
 import com.vrtechnologies.vrtech.entity.enums.Module;
@@ -12,13 +13,20 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.LocalDateTime;
+import java.util.Optional;
+
 @Service
 public class AdminActivityLogService {
 
     private final AdminActivityLogRepository repository;
+    private final SseEmitterService sseEmitterService;
 
-    public AdminActivityLogService(AdminActivityLogRepository repository) {
+    public AdminActivityLogService(AdminActivityLogRepository repository, SseEmitterService sseEmitterService) {
         this.repository = repository;
+        this.sseEmitterService = sseEmitterService;
     }
 
     public void log(User admin, Module module, PermissionAction action, String entityType, Long entityId, String description) {
@@ -45,7 +53,36 @@ public class AdminActivityLogService {
             entry.setIpAddress(extractIp(request));
             entry.setUserAgent(truncate(request.getHeader("User-Agent"), 512));
         }
-        repository.save(entry);
+
+        // Cryptographic Ledger Chaining
+        Optional<AdminActivityLog> latestLog = repository.findFirstByOrderByIdDesc();
+        String prevHash = latestLog.map(AdminActivityLog::getCurrentHash).orElse("GENESIS-VR-TECH");
+        entry.setPreviousHash(prevHash);
+
+        String dataToHash = (entry.getAdminEmail() != null ? entry.getAdminEmail() : "ANONYMOUS") + ":" +
+                            (entry.getModule() != null ? entry.getModule().name() : "NONE") + ":" +
+                            (entry.getAction() != null ? entry.getAction().name() : "NONE") + ":" +
+                            (entry.getOldValue() != null ? entry.getOldValue() : "") + ":" +
+                            (entry.getNewValue() != null ? entry.getNewValue() : "") + ":" +
+                            prevHash;
+        entry.setCurrentHash(calculateSha256(dataToHash));
+
+        AdminActivityLog saved = repository.save(entry);
+
+        // Broadcast Real-time system event
+        try {
+            SystemEvent sseEvent = SystemEvent.builder()
+                    .eventType("SETTING_MUTATED")
+                    .title("Admin Operation logged")
+                    .message((admin != null ? admin.getEmail() : "System") + " executed " + action.name() + " on " + module.name())
+                    .severity("INFO")
+                    .payload(saved)
+                    .timestamp(LocalDateTime.now())
+                    .build();
+            sseEmitterService.broadcast(sseEvent);
+        } catch (Exception e) {
+            // Suppress event broadcasting exceptions to ensure audit log write never fails
+        }
     }
 
     public Page<AdminActivityLog> all(Pageable pageable) {
@@ -82,5 +119,21 @@ public class AdminActivityLogService {
             return null;
         }
         return value.length() <= max ? value : value.substring(0, max);
+    }
+
+    private String calculateSha256(String data) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(data.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (Exception ex) {
+            throw new RuntimeException("SHA-256 algorithm not found", ex);
+        }
     }
 }

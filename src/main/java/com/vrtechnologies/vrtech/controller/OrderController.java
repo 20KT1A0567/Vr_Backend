@@ -111,12 +111,19 @@ public class OrderController {
         return ApiResponse.ok("Return requested", orderService.getMyOrder(returnRequestService.requestReturn(id, request.getReason()).getOrderId()));
     }
 
-    @GetMapping(value = "/api/users/orders/{id}/invoice", produces = MediaType.APPLICATION_PDF_VALUE)
-    public ResponseEntity<byte[]> downloadInvoice(@PathVariable Long id) {
+    @GetMapping(value = "/api/users/orders/{id}/invoice")
+    public ResponseEntity<byte[]> downloadInvoice(@PathVariable Long id, @RequestParam(required = false) String format) {
         OrderResponse order = orderService.getMyOrder(id);
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + order.getInvoiceNumber() + ".pdf\"")
-                .contentType(MediaType.APPLICATION_PDF)
-                .body(orderService.generateInvoicePdfForUser(id));
+        if ("WORD".equalsIgnoreCase(format)) {
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + order.getInvoiceNumber() + ".doc\"")
+                    .contentType(MediaType.parseMediaType("application/msword"))
+                    .body(orderService.generateInvoiceWordForUser(id));
+        } else {
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + order.getInvoiceNumber() + ".pdf\"")
+                    .contentType(MediaType.APPLICATION_PDF)
+                    .body(orderService.generateInvoicePdfForUser(id));
+        }
     }
 }

@@ -56,6 +56,9 @@ public class PermissionService {
         if (admin.getRole() == Role.SUPER_ADMIN) {
             return true;
         }
+        if (module == Module.ADMINS) {
+            return false;
+        }
 
         Boolean adminOverride = readAdminOverride(admin.getId(), module, action);
         if (adminOverride != null) {
@@ -99,12 +102,23 @@ public class PermissionService {
     }
 
     public Map<Module, EnumSet<PermissionAction>> effectivePermissions(User admin) {
+        if (admin == null) {
+            return new LinkedHashMap<>();
+        }
+        if (admin.getRole() == Role.SUPER_ADMIN) {
+            Map<Module, EnumSet<PermissionAction>> all = new LinkedHashMap<>();
+            for (Module module : Module.values()) {
+                all.put(module, EnumSet.allOf(PermissionAction.class));
+            }
+            return all;
+        }
         Map<Module, EnumSet<PermissionAction>> base = matrix.rolePermissions(admin.getRole()).entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, entry -> EnumSet.copyOf(entry.getValue()),
                         (a, b) -> a, LinkedHashMap::new));
 
         rolePermissionRepository.findByRole(resolveRoleKey(admin)).forEach(permission -> applyOverride(base, permission.getModule(), permission.getAction(), permission.isGranted()));
         adminPermissionRepository.findByAdminId(admin.getId()).forEach(permission -> applyOverride(base, permission.getModule(), permission.getAction(), permission.isGranted()));
+        base.remove(Module.ADMINS);
         return base;
     }
 
@@ -122,6 +136,7 @@ public class PermissionService {
                         (a, b) -> a, LinkedHashMap::new));
 
         rolePermissionRepository.findByRole(role.getRoleKey()).forEach(permission -> applyOverride(base, permission.getModule(), permission.getAction(), permission.isGranted()));
+        base.remove(Module.ADMINS);
         return base;
     }
 

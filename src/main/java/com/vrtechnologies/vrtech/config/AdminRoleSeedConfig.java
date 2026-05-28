@@ -33,14 +33,20 @@ public class AdminRoleSeedConfig {
 
             descriptions.entrySet().stream()
                     .filter(entry -> entry.getKey() != Role.SUPER_ADMIN)
-                    .forEach(entry -> adminRoleRepository.findById(entry.getKey().name()).ifPresent(role -> {
+                    .forEach(entry -> {
+                        AdminRole role = adminRoleRepository.findById(entry.getKey().name()).orElseGet(() -> {
+                            AdminRole r = new AdminRole();
+                            r.setRoleKey(entry.getKey().name());
+                            r.setActive(true);
+                            return r;
+                        });
                         role.setDisplayName(formatDisplayName(entry.getKey()));
                         role.setDescription(entry.getValue());
                         role.setBaseRole(entry.getKey());
                         role.setSystemRole(false);
                         role.setProtectedRole(false);
                         adminRoleRepository.save(role);
-                    }));
+                    });
         };
     }
 

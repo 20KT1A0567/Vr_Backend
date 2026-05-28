@@ -38,9 +38,7 @@ public class RolePermissionMatrix {
         // ADMIN (legacy): everything except admin user management
         Map<Module, EnumSet<PermissionAction>> admin = new EnumMap<>(Module.class);
         for (Module module : Module.values()) {
-            if (module == Module.ADMINS) {
-                admin.put(module, EnumSet.of(PermissionAction.VIEW));
-            } else {
+            if (module != Module.ADMINS) {
                 admin.put(module, EnumSet.copyOf(ALL_ACTIONS));
             }
         }

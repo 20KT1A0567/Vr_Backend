@@ -183,6 +183,7 @@ public class AdminService {
         List<Long> accessibleStoreIds = permissionService.accessibleStoreIds(admin);
         return userRepository.findAll().stream()
                 .filter(user -> canAccessUser(accessibleStoreIds, user))
+                .filter(user -> admin.getRole() == Role.SUPER_ADMIN || user.getRole() == Role.USER)
                 .map(this::toResponse)
                 .toList();
     }

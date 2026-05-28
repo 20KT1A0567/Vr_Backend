@@ -3,13 +3,17 @@ package com.vrtechnologies.vrtech.controller;
 import com.vrtechnologies.vrtech.service.SseEmitterService;
 import com.vrtechnologies.vrtech.service.UserContextService;
 import com.vrtechnologies.vrtech.entity.User;
+import com.vrtechnologies.vrtech.entity.AdminPing;
+import com.vrtechnologies.vrtech.repository.AdminPingRepository;
 import com.vrtechnologies.vrtech.dto.event.SystemEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.List;
@@ -23,13 +27,15 @@ public class RealtimeAdminController {
     
     private final SseEmitterService sseEmitterService;
     private final UserContextService userContextService;
+    private final AdminPingRepository adminPingRepository;
     
     private static final Map<String, Map<String, Object>> activeLocks = new ConcurrentHashMap<>();
     private static final Map<String, Map<String, Object>> activePresence = new ConcurrentHashMap<>();
 
-    public RealtimeAdminController(SseEmitterService sseEmitterService, UserContextService userContextService) {
+    public RealtimeAdminController(SseEmitterService sseEmitterService, UserContextService userContextService, AdminPingRepository adminPingRepository) {
         this.sseEmitterService = sseEmitterService;
         this.userContextService = userContextService;
+        this.adminPingRepository = adminPingRepository;
     }
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -38,19 +44,98 @@ public class RealtimeAdminController {
         return sseEmitterService.subscribe();
     }
 
+    @GetMapping("/pings")
+    public List<Map<String, Object>> getPings() {
+        log.info("Fetching real team chats from database");
+        List<AdminPing> dbPings = adminPingRepository.findAllByOrderByPingTimestampAsc();
+        List<Map<String, Object>> response = new ArrayList<>();
+        for (AdminPing p : dbPings) {
+            response.add(Map.of(
+                "id", p.getId(),
+                "senderEmail", p.getSenderEmail(),
+                "senderName", p.getSenderName() != null ? p.getSenderName() : p.getSenderEmail().split("@")[0],
+                "senderRole", p.getSenderRole() != null ? p.getSenderRole() : "ADMIN",
+                "message", p.getMessage(),
+                "timestamp", p.getPingTimestamp().toString()
+            ));
+        }
+        return response;
+    }
+
     @PostMapping("/ping")
     public Map<String, Object> broadcastPing(@RequestBody Map<String, Object> payload) {
-        log.info("Broadcasting team peer note from admin session");
+        log.info("Saving and broadcasting team peer note from admin session");
+        
+        String senderEmail = (String) payload.get("senderEmail");
+        String senderName = (String) payload.get("senderName");
+        String senderRole = (String) payload.get("senderRole");
+        String message = (String) payload.get("message");
+        
+        // Save to database
+        AdminPing newPing = AdminPing.builder()
+                .senderEmail(senderEmail != null ? senderEmail : "admin@vrtech.in")
+                .senderName(senderName)
+                .senderRole(senderRole)
+                .message(message)
+                .pingTimestamp(LocalDateTime.now())
+                .build();
+        
+        AdminPing savedPing = adminPingRepository.save(newPing);
+        
+        // Put the newly saved ID into the broadcast payload
+        Map<String, Object> broadcastPayload = new java.util.HashMap<>(payload);
+        broadcastPayload.put("id", savedPing.getId());
+        broadcastPayload.put("timestamp", savedPing.getPingTimestamp().toString());
+        
         SystemEvent pingEvent = SystemEvent.builder()
                 .eventType("ADMIN_PING")
                 .title("Peer Message")
-                .message((String) payload.get("message"))
+                .message(message)
                 .severity("INFO")
-                .payload(payload)
+                .payload(broadcastPayload)
                 .timestamp(LocalDateTime.now())
                 .build();
         sseEmitterService.broadcast(pingEvent);
-        return Map.of("success", true, "message", "Command note broadcasted");
+        return Map.of("success", true, "message", "Command note broadcasted", "id", savedPing.getId());
+    }
+
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PostMapping("/pings/clear")
+    public Map<String, Object> clearPings(@RequestBody Map<String, Object> payload) {
+        String mode = (String) payload.get("mode"); // "selected", "day-wise", "all"
+        log.info("Super admin requested clear pings: mode={}", mode);
+        
+        if ("selected".equalsIgnoreCase(mode)) {
+            List<Number> ids = (List<Number>) payload.get("ids");
+            if (ids != null && !ids.isEmpty()) {
+                List<Long> longIds = ids.stream().map(Number::longValue).toList();
+                adminPingRepository.deleteSelectedPings(longIds);
+                log.info("Deleted selected pings: {}", longIds);
+            }
+        } else if ("day-wise".equalsIgnoreCase(mode)) {
+            Number days = (Number) payload.get("days");
+            if (days != null) {
+                LocalDateTime threshold = LocalDateTime.now().minusDays(days.longValue());
+                adminPingRepository.deletePingsOlderThan(threshold);
+                log.info("Deleted pings older than {} days (threshold={})", days, threshold);
+            }
+        } else if ("all".equalsIgnoreCase(mode)) {
+            adminPingRepository.clearAllPings();
+            log.info("Cleared all team pings from database");
+        }
+        
+        // Broadcast refresh event so all connected admins clear their client screens in real-time
+        SystemEvent resetEvent = SystemEvent.builder()
+                .eventType("ADMIN_PING_RESET")
+                .title("Chat Cleared")
+                .message("Team chats have been cleared/updated by super admin")
+                .severity("INFO")
+                .payload(Map.of("mode", mode != null ? mode : "all"))
+                .timestamp(LocalDateTime.now())
+                .build();
+        sseEmitterService.broadcast(resetEvent);
+        
+        return Map.of("success", true, "message", "Clear operation executed");
     }
 
     @GetMapping("/locks")
@@ -158,6 +243,11 @@ public class RealtimeAdminController {
             }
         });
         return unexpired;
+    }
+
+    @GetMapping("/presence")
+    public List<Map<String, Object>> getPresence() {
+        return getUnexpiredPresence();
     }
 
     @PostMapping("/presence/heartbeat")

@@ -6,6 +6,7 @@ import com.vrtechnologies.vrtech.entity.User;
 import com.vrtechnologies.vrtech.entity.AdminPing;
 import com.vrtechnologies.vrtech.repository.AdminPingRepository;
 import com.vrtechnologies.vrtech.dto.event.SystemEvent;
+import com.vrtechnologies.vrtech.dto.response.ApiResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -45,7 +46,7 @@ public class RealtimeAdminController {
     }
 
     @GetMapping("/pings")
-    public List<Map<String, Object>> getPings() {
+    public ApiResponse<List<Map<String, Object>>> getPings() {
         log.info("Fetching real team chats from database");
         List<AdminPing> dbPings = adminPingRepository.findAllByOrderByPingTimestampAsc();
         List<Map<String, Object>> response = new ArrayList<>();
@@ -59,11 +60,11 @@ public class RealtimeAdminController {
                 "timestamp", p.getPingTimestamp().toString()
             ));
         }
-        return response;
+        return ApiResponse.ok("Pings retrieved", response);
     }
 
     @PostMapping("/ping")
-    public Map<String, Object> broadcastPing(@RequestBody Map<String, Object> payload) {
+    public ApiResponse<Map<String, Object>> broadcastPing(@RequestBody Map<String, Object> payload) {
         log.info("Saving and broadcasting team peer note from admin session");
         
         String senderEmail = (String) payload.get("senderEmail");
@@ -96,12 +97,12 @@ public class RealtimeAdminController {
                 .timestamp(LocalDateTime.now())
                 .build();
         sseEmitterService.broadcast(pingEvent);
-        return Map.of("success", true, "message", "Command note broadcasted", "id", savedPing.getId());
+        return ApiResponse.ok("Command note broadcasted", Map.of("success", true, "message", "Command note broadcasted", "id", savedPing.getId()));
     }
 
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @PostMapping("/pings/clear")
-    public Map<String, Object> clearPings(@RequestBody Map<String, Object> payload) {
+    public ApiResponse<Map<String, Object>> clearPings(@RequestBody Map<String, Object> payload) {
         String mode = (String) payload.get("mode"); // "selected", "day-wise", "all"
         log.info("Super admin requested clear pings: mode={}", mode);
         
@@ -135,19 +136,19 @@ public class RealtimeAdminController {
                 .build();
         sseEmitterService.broadcast(resetEvent);
         
-        return Map.of("success", true, "message", "Clear operation executed");
+        return ApiResponse.ok("Clear operation executed", Map.of("success", true, "message", "Clear operation executed"));
     }
 
     @GetMapping("/locks")
-    public Map<String, Map<String, Object>> getLocks() {
-        return getUnexpiredLocks();
+    public ApiResponse<Map<String, Map<String, Object>>> getLocks() {
+        return ApiResponse.ok("Locks retrieved", getUnexpiredLocks());
     }
 
     @PostMapping("/locks/acquire")
-    public Map<String, Object> acquireLock(@RequestBody Map<String, String> payload) {
+    public ApiResponse<Map<String, Object>> acquireLock(@RequestBody Map<String, String> payload) {
         String resourceId = payload.get("resourceId");
         if (resourceId == null || resourceId.isBlank()) {
-            return Map.of("success", false, "message", "resourceId is required");
+            return ApiResponse.error("resourceId is required", Map.of("success", false, "message", "resourceId is required"));
         }
 
         User currentUser = userContextService.getCurrentUser();
@@ -161,11 +162,11 @@ public class RealtimeAdminController {
             
             // Check if lock has not expired and belongs to someone else
             if (timestamp != null && timestamp >= threshold && !currentUser.getEmail().equalsIgnoreCase(holderEmail)) {
-                return Map.of(
+                return ApiResponse.ok("Lock held by another user", Map.of(
                     "success", false,
                     "holderEmail", holderEmail,
                     "holderName", existingLock.get("adminName")
-                );
+                ));
             }
         }
 
@@ -179,14 +180,14 @@ public class RealtimeAdminController {
         log.info("Lock acquired/renewed by {} on resource {}", currentUser.getEmail(), resourceId);
         
         broadcastCollaborationUpdate();
-        return Map.of("success", true);
+        return ApiResponse.ok("Lock acquired", Map.of("success", true));
     }
 
     @PostMapping("/locks/release")
-    public Map<String, Object> releaseLock(@RequestBody Map<String, String> payload) {
+    public ApiResponse<Map<String, Object>> releaseLock(@RequestBody Map<String, String> payload) {
         String resourceId = payload.get("resourceId");
         if (resourceId == null || resourceId.isBlank()) {
-            return Map.of("success", false, "message", "resourceId is required");
+            return ApiResponse.error("resourceId is required", Map.of("success", false, "message", "resourceId is required"));
         }
 
         User currentUser = userContextService.getCurrentUser();
@@ -200,7 +201,7 @@ public class RealtimeAdminController {
             }
         }
 
-        return Map.of("success", true);
+        return ApiResponse.ok("Lock released", Map.of("success", true));
     }
 
     @Scheduled(fixedDelay = 15000)
@@ -246,12 +247,12 @@ public class RealtimeAdminController {
     }
 
     @GetMapping("/presence")
-    public List<Map<String, Object>> getPresence() {
-        return getUnexpiredPresence();
+    public ApiResponse<List<Map<String, Object>>> getPresence() {
+        return ApiResponse.ok("Presence list retrieved", getUnexpiredPresence());
     }
 
     @PostMapping("/presence/heartbeat")
-    public Map<String, Object> updatePresence(@RequestBody Map<String, String> payload) {
+    public ApiResponse<Map<String, Object>> updatePresence(@RequestBody Map<String, String> payload) {
         String page = payload.get("page");
         String url = payload.get("url");
         if (page == null) page = "Admin Workspace";
@@ -271,7 +272,7 @@ public class RealtimeAdminController {
         activePresence.put(sessionKey, presenceData);
         broadcastPresenceUpdate();
 
-        return Map.of("success", true);
+        return ApiResponse.ok("Presence updated", Map.of("success", true));
     }
 
     @Scheduled(fixedDelay = 15000)

@@ -57,4 +57,39 @@ class DbCheckTest {
         }
         System.out.println("=== END OF INSPECTION ===");
     }
+
+    @Autowired
+    private com.vrtechnologies.vrtech.repository.AdminPingRepository pingRepo;
+
+    @Autowired
+    private com.vrtechnologies.vrtech.controller.RealtimeAdminController realtimeController;
+
+    @Test
+    void inspectAdminPings() {
+        System.out.println("=== INSPECTING ADMIN PINGS ===");
+        List<com.vrtechnologies.vrtech.entity.AdminPing> pings = pingRepo.findAllByOrderByPingTimestampAsc();
+        System.out.println("Pings count: " + pings.size());
+        for (com.vrtechnologies.vrtech.entity.AdminPing p : pings) {
+            System.out.println("  Ping ID=" + p.getId() + ", Sender=" + p.getSenderEmail() + ", Message=" + p.getMessage() + ", Timestamp=" + p.getPingTimestamp());
+        }
+        System.out.println("=== END OF ADMIN PINGS INSPECTION ===");
+    }
+
+    @Test
+    void testBroadcastPing() {
+        System.out.println("=== TESTING BROADCAST PING ===");
+        try {
+            java.util.Map<String, Object> payload = java.util.Map.of(
+                "senderEmail", "venkat@anushatechnologies.com",
+                "senderName", "Venkat Test",
+                "senderRole", "SUPER_ADMIN",
+                "message", "Test message from JUnit"
+            );
+            com.vrtechnologies.vrtech.dto.response.ApiResponse<java.util.Map<String, Object>> result = realtimeController.broadcastPing(payload);
+            System.out.println("Broadcast Ping Result: " + result.getData());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        System.out.println("=== END OF TESTING BROADCAST PING ===");
+    }
 }

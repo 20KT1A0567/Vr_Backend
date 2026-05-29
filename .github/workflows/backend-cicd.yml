@@ -138,17 +138,11 @@ jobs:
           chmod +x /tmp/deploy.sh
 
       - name: Copy files to EC2
-        env:
-          REMOTE: ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}
-          SSH_OPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
         run: |
-          ssh $SSH_OPTS $REMOTE "mkdir -p ~/vr-backend"
-          scp $SSH_OPTS /tmp/app.env $REMOTE:~/vr-backend/.env
-          scp $SSH_OPTS /tmp/deploy.sh $REMOTE:~/deploy.sh
-          echo "Files copied to EC2"
+          ssh -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "mkdir -p ~/vr-backend"
+          scp -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no /tmp/app.env "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/vr-backend/.env"
+          scp -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no /tmp/deploy.sh "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/deploy.sh"
+          echo "Files copied to EC2 successfully"
 
       - name: Run deploy script on EC2
-        env:
-          REMOTE: ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}
-          SSH_OPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
-        run: ssh $SSH_OPTS $REMOTE "bash ~/deploy.sh"
+        run: ssh -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "bash ~/deploy.sh"

@@ -1039,22 +1039,33 @@ public class ProductService {
         );
     }
 
+    private Predicate buildWordBoundaryPredicate(jakarta.persistence.criteria.Expression<String> expression, String queryText, jakarta.persistence.criteria.CriteriaBuilder cb) {
+        String cleanQuery = queryText.trim().toLowerCase();
+        return cb.or(
+            cb.like(cb.lower(expression), cleanQuery + "%"),
+            cb.like(cb.lower(expression), "% " + cleanQuery + "%"),
+            cb.like(cb.lower(expression), "%-" + cleanQuery + "%"),
+            cb.like(cb.lower(expression), "%/" + cleanQuery + "%"),
+            cb.like(cb.lower(expression), "%(" + cleanQuery + "%"),
+            cb.like(cb.lower(expression), "%[" + cleanQuery + "%")
+        );
+    }
+
     private Specification<Product> matchesQuery(String queryText) {
         if (queryText == null || queryText.isBlank()) {
             return null;
         }
-        String value = "%" + queryText.trim().toLowerCase() + "%";
         return (root, query, criteriaBuilder) -> {
             query.distinct(true);
             Join<Object, Object> brand = root.join("brand", JoinType.LEFT);
             Join<Object, Object> category = root.join("category", JoinType.LEFT);
             return criteriaBuilder.or(
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("title")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("modelNumber")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("processor")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("description")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(brand.get("name")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(category.get("name")), value)
+                    buildWordBoundaryPredicate(root.get("title"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(root.get("modelNumber"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(root.get("processor"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(root.get("description"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(brand.get("name"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(category.get("name"), queryText, criteriaBuilder)
             );
         };
     }
@@ -1063,20 +1074,19 @@ public class ProductService {
         if (queryText == null || queryText.isBlank()) {
             return null;
         }
-        String value = "%" + queryText.trim().toLowerCase() + "%";
         return (root, query, criteriaBuilder) -> {
             query.distinct(true);
             Join<Object, Object> brand = root.join("brand", JoinType.LEFT);
             Join<Object, Object> category = root.join("category", JoinType.LEFT);
             return criteriaBuilder.or(
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("title")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("modelNumber")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("processor")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("description")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("sku")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(root.get("serialNumber")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(brand.get("name")), value),
-                    criteriaBuilder.like(criteriaBuilder.lower(category.get("name")), value)
+                    buildWordBoundaryPredicate(root.get("title"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(root.get("modelNumber"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(root.get("processor"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(root.get("description"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(root.get("sku"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(root.get("serialNumber"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(brand.get("name"), queryText, criteriaBuilder),
+                    buildWordBoundaryPredicate(category.get("name"), queryText, criteriaBuilder)
             );
         };
     }

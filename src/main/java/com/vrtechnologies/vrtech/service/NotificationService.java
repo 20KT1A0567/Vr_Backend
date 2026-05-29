@@ -3,6 +3,7 @@ package com.vrtechnologies.vrtech.service;
 import com.vrtechnologies.vrtech.entity.CustomerOrder;
 import com.vrtechnologies.vrtech.entity.NotificationLog;
 import com.vrtechnologies.vrtech.repository.NotificationLogRepository;
+import com.vrtechnologies.vrtech.dto.event.SystemEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +29,7 @@ public class NotificationService {
     private final NotificationLogRepository notificationLogRepository;
     private final EmailService emailService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final SseEmitterService sseEmitterService;
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
     @Value("${app.notifications.worker.enabled:true}")
@@ -42,10 +44,11 @@ public class NotificationService {
     @Value("${app.whatsapp.bearer-token:}")
     private String whatsappBearerToken;
 
-    public NotificationService(NotificationLogRepository notificationLogRepository, EmailService emailService, com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+    public NotificationService(NotificationLogRepository notificationLogRepository, EmailService emailService, com.fasterxml.jackson.databind.ObjectMapper objectMapper, SseEmitterService sseEmitterService) {
         this.notificationLogRepository = notificationLogRepository;
         this.emailService = emailService;
         this.objectMapper = objectMapper;
+        this.sseEmitterService = sseEmitterService;
     }
 
     public void logOrderEvent(String eventType, CustomerOrder order, String subject, String message) {
@@ -96,7 +99,29 @@ public class NotificationService {
         entry.setAttempts(0);
         entry.setMaxAttempts(3);
         entry.setNextAttemptAt(LocalDateTime.now());
-        return notificationLogRepository.save(entry);
+        NotificationLog saved = notificationLogRepository.save(entry);
+        
+        try {
+            SystemEvent event = SystemEvent.builder()
+                    .eventType("NOTIFICATION_CREATED")
+                    .title("New Notification")
+                    .message(saved.getSubject() != null ? saved.getSubject() : saved.getMessage())
+                    .severity("INFO")
+                    .payload(java.util.Map.of(
+                            "id", saved.getId(),
+                            "channel", saved.getChannel(),
+                            "eventType", saved.getEventType(),
+                            "subject", saved.getSubject() != null ? saved.getSubject() : "",
+                            "message", saved.getMessage() != null ? saved.getMessage() : ""
+                    ))
+                    .timestamp(LocalDateTime.now())
+                    .build();
+            sseEmitterService.broadcast(event);
+        } catch (Exception e) {
+            log.error("Failed to broadcast notification event: {}", e.getMessage());
+        }
+        
+        return saved;
     }
 
     private boolean isDeliverableEmail(String recipient) {
@@ -123,7 +148,29 @@ public class NotificationService {
         entry.setOrderId(orderId);
         entry.setSentAt(LocalDateTime.now());
         entry.setNextAttemptAt(null);
-        return notificationLogRepository.save(entry);
+        NotificationLog saved = notificationLogRepository.save(entry);
+        
+        try {
+            SystemEvent event = SystemEvent.builder()
+                    .eventType("NOTIFICATION_CREATED")
+                    .title("New In-App Notification")
+                    .message(saved.getSubject() != null ? saved.getSubject() : saved.getMessage())
+                    .severity("INFO")
+                    .payload(java.util.Map.of(
+                            "id", saved.getId(),
+                            "channel", saved.getChannel(),
+                            "eventType", saved.getEventType(),
+                            "subject", saved.getSubject() != null ? saved.getSubject() : "",
+                            "message", saved.getMessage() != null ? saved.getMessage() : ""
+                    ))
+                    .timestamp(LocalDateTime.now())
+                    .build();
+            sseEmitterService.broadcast(event);
+        } catch (Exception e) {
+            log.error("Failed to broadcast in-app notification event: {}", e.getMessage());
+        }
+        
+        return saved;
     }
 
     @Scheduled(fixedDelayString = "${app.notifications.worker.delay-ms:30000}")

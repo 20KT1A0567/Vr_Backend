@@ -30,6 +30,7 @@ public class NotificationService {
     private final EmailService emailService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final SseEmitterService sseEmitterService;
+    private final PushNotificationService pushNotificationService;
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
     @Value("${app.notifications.worker.enabled:true}")
@@ -44,11 +45,18 @@ public class NotificationService {
     @Value("${app.whatsapp.bearer-token:}")
     private String whatsappBearerToken;
 
-    public NotificationService(NotificationLogRepository notificationLogRepository, EmailService emailService, com.fasterxml.jackson.databind.ObjectMapper objectMapper, SseEmitterService sseEmitterService) {
+    public NotificationService(
+            NotificationLogRepository notificationLogRepository,
+            EmailService emailService,
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+            SseEmitterService sseEmitterService,
+            PushNotificationService pushNotificationService
+    ) {
         this.notificationLogRepository = notificationLogRepository;
         this.emailService = emailService;
         this.objectMapper = objectMapper;
         this.sseEmitterService = sseEmitterService;
+        this.pushNotificationService = pushNotificationService;
     }
 
     public void logOrderEvent(String eventType, CustomerOrder order, String subject, String message) {
@@ -121,6 +129,10 @@ public class NotificationService {
             log.error("Failed to broadcast notification event: {}", e.getMessage());
         }
         
+        if (saved != null && isSystemAlert(eventType)) {
+            pushNotificationService.sendPushToAllAdmins(saved.getSubject(), saved.getMessage());
+        }
+        
         return saved;
     }
 
@@ -170,7 +182,18 @@ public class NotificationService {
             log.error("Failed to broadcast in-app notification event: {}", e.getMessage());
         }
         
+        if (saved != null && isSystemAlert(eventType)) {
+            pushNotificationService.sendPushToAllAdmins(saved.getSubject(), saved.getMessage());
+        }
+        
         return saved;
+    }
+
+    private boolean isSystemAlert(String eventType) {
+        if (eventType == null) return false;
+        String upper = eventType.toUpperCase();
+        return upper.contains("ORDER") || upper.contains("SUPPORT") || upper.contains("SECURITY") 
+            || upper.contains("PAYMENT") || upper.contains("CART") || upper.contains("STOCK");
     }
 
     @Scheduled(fixedDelayString = "${app.notifications.worker.delay-ms:30000}")

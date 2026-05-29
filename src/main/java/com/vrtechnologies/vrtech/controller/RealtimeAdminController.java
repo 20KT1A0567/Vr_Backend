@@ -59,9 +59,14 @@ public class RealtimeAdminController {
     }
 
     @GetMapping("/pings")
-    public ApiResponse<List<Map<String, Object>>> getPings() {
-        log.info("Fetching real team chats from database");
-        List<AdminPing> dbPings = adminPingRepository.findAllByOrderByPingTimestampAsc();
+    public ApiResponse<List<Map<String, Object>>> getPings(@RequestParam(value = "channel", required = false) String channel) {
+        log.info("Fetching real team chats from database, channel={}", channel);
+        List<AdminPing> dbPings;
+        if (channel != null && !channel.isBlank()) {
+            dbPings = adminPingRepository.findByChannelOrderByPingTimestampAsc(channel);
+        } else {
+            dbPings = adminPingRepository.findAllByOrderByPingTimestampAsc();
+        }
         List<Map<String, Object>> response = new ArrayList<>();
         for (AdminPing p : dbPings) {
             response.add(Map.of(
@@ -70,6 +75,7 @@ public class RealtimeAdminController {
                 "senderName", p.getSenderName() != null ? p.getSenderName() : p.getSenderEmail().split("@")[0],
                 "senderRole", p.getSenderRole() != null ? p.getSenderRole() : "ADMIN",
                 "message", p.getMessage(),
+                "channel", p.getChannel() != null ? p.getChannel() : "general",
                 "timestamp", p.getPingTimestamp().toString()
             ));
         }
@@ -84,6 +90,10 @@ public class RealtimeAdminController {
         String senderName = (String) payload.get("senderName");
         String senderRole = (String) payload.get("senderRole");
         String message = (String) payload.get("message");
+        String channel = (String) payload.get("channel");
+        if (channel == null || channel.isBlank()) {
+            channel = "general";
+        }
         
         // Save to database
         AdminPing newPing = AdminPing.builder()
@@ -91,6 +101,7 @@ public class RealtimeAdminController {
                 .senderName(senderName)
                 .senderRole(senderRole)
                 .message(message)
+                .channel(channel)
                 .pingTimestamp(LocalDateTime.now())
                 .build();
         
@@ -99,6 +110,7 @@ public class RealtimeAdminController {
         // Put the newly saved ID into the broadcast payload
         Map<String, Object> broadcastPayload = new java.util.HashMap<>(payload);
         broadcastPayload.put("id", savedPing.getId());
+        broadcastPayload.put("channel", savedPing.getChannel());
         broadcastPayload.put("timestamp", savedPing.getPingTimestamp().toString());
         
         SystemEvent pingEvent = SystemEvent.builder()
@@ -163,6 +175,10 @@ public class RealtimeAdminController {
         if (resourceId == null || resourceId.isBlank()) {
             return ApiResponse.error("resourceId is required", Map.of("success", false, "message", "resourceId is required"));
         }
+        String lockType = payload.get("lockType");
+        if (lockType == null || lockType.isBlank()) {
+            lockType = "SOFT";
+        }
 
         User currentUser = userContextService.getCurrentUser();
         long now = System.currentTimeMillis();
@@ -178,7 +194,8 @@ public class RealtimeAdminController {
                 return ApiResponse.ok("Lock held by another user", Map.of(
                     "success", false,
                     "holderEmail", holderEmail,
-                    "holderName", existingLock.get("adminName")
+                    "holderName", existingLock.get("adminName"),
+                    "lockType", existingLock.getOrDefault("lockType", "SOFT")
                 ));
             }
         }
@@ -187,13 +204,33 @@ public class RealtimeAdminController {
         Map<String, Object> lockData = Map.of(
             "adminEmail", currentUser.getEmail(),
             "adminName", currentUser.getName(),
+            "lockType", lockType,
             "timestamp", now
         );
         activeLocks.put(resourceId, lockData);
-        log.info("Lock acquired/renewed by {} on resource {}", currentUser.getEmail(), resourceId);
+        log.info("Lock acquired/renewed by {} on resource {} with type {}", currentUser.getEmail(), resourceId, lockType);
         
         broadcastCollaborationUpdate();
-        return ApiResponse.ok("Lock acquired", Map.of("success", true));
+        return ApiResponse.ok("Lock acquired", Map.of("success", true, "lockType", lockType));
+    }
+
+    public static boolean isResourceHardLocked(String resourceId, String currentUserEmail) {
+        Map<String, Object> lock = activeLocks.get(resourceId);
+        if (lock == null) return false;
+        
+        long threshold = System.currentTimeMillis() - 45000;
+        Long timestamp = (Long) lock.get("timestamp");
+        if (timestamp == null || timestamp < threshold) {
+            return false; // Expired
+        }
+        
+        String lockType = (String) lock.get("lockType");
+        if (!"HARD".equalsIgnoreCase(lockType)) {
+            return false; // Not a hard lock
+        }
+        
+        String holderEmail = (String) lock.get("adminEmail");
+        return holderEmail != null && !holderEmail.equalsIgnoreCase(currentUserEmail);
     }
 
     @PostMapping("/locks/release")
@@ -265,11 +302,18 @@ public class RealtimeAdminController {
     }
 
     @PostMapping("/presence/heartbeat")
-    public ApiResponse<Map<String, Object>> updatePresence(@RequestBody Map<String, String> payload) {
-        String page = payload.get("page");
-        String url = payload.get("url");
+    public ApiResponse<Map<String, Object>> updatePresence(@RequestBody Map<String, Object> payload) {
+        String page = (String) payload.get("page");
+        String url = (String) payload.get("url");
+        String status = (String) payload.get("status");
+        String entity = (String) payload.get("entity");
+        String entityId = (String) payload.get("entityId");
+        String action = (String) payload.get("action");
+        Object metadata = payload.get("metadata");
+
         if (page == null) page = "Admin Workspace";
         if (url == null) url = "/";
+        if (status == null) status = "reviewing";
 
         User currentUser = userContextService.getCurrentUser();
         String sessionKey = currentUser.getEmail();
@@ -287,14 +331,19 @@ public class RealtimeAdminController {
             roleName = currentUser.getRole().name();
         }
 
-        Map<String, Object> presenceData = Map.of(
-            "adminEmail", currentUser.getEmail(),
-            "adminName", currentUser.getName(),
-            "adminRole", roleName,
-            "page", page,
-            "url", url,
-            "timestamp", System.currentTimeMillis()
-        );
+        Map<String, Object> presenceData = new java.util.HashMap<>();
+        presenceData.put("adminEmail", currentUser.getEmail());
+        presenceData.put("adminName", currentUser.getName());
+        presenceData.put("adminRole", roleName);
+        presenceData.put("page", page);
+        presenceData.put("url", url);
+        presenceData.put("status", status);
+        if (entity != null) presenceData.put("entity", entity);
+        if (entityId != null) presenceData.put("entityId", entityId);
+        if (action != null) presenceData.put("action", action);
+        if (metadata != null) presenceData.put("metadata", metadata);
+        presenceData.put("timestamp", System.currentTimeMillis());
+
         activePresence.put(sessionKey, presenceData);
         broadcastPresenceUpdate();
 

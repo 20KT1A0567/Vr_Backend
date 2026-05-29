@@ -41,6 +41,10 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import com.vrtechnologies.vrtech.entity.ProductPriceHistory;
+import com.vrtechnologies.vrtech.repository.ProductPriceHistoryRepository;
+import com.vrtechnologies.vrtech.dto.event.PriceUpdatedEvent;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -77,6 +81,8 @@ public class ProductService {
     private final AdminActivityLogService activityLogService;
     private final NotificationService notificationService;
     private final SseEmitterService sseEmitterService;
+    private final ProductPriceHistoryRepository productPriceHistoryRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     public ProductService(
             ProductRepository productRepository,
@@ -89,7 +95,9 @@ public class ProductService {
             PermissionService permissionService,
             AdminActivityLogService activityLogService,
             NotificationService notificationService,
-            SseEmitterService sseEmitterService
+            SseEmitterService sseEmitterService,
+            ProductPriceHistoryRepository productPriceHistoryRepository,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.productRepository = productRepository;
         this.brandRepository = brandRepository;
@@ -102,6 +110,8 @@ public class ProductService {
         this.activityLogService = activityLogService;
         this.notificationService = notificationService;
         this.sseEmitterService = sseEmitterService;
+        this.productPriceHistoryRepository = productPriceHistoryRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     @Scheduled(fixedDelayString = "${app.low-stock-alerts.worker.delay-ms:900000}")
@@ -289,6 +299,10 @@ public class ProductService {
         Product saved = productRepository.save(product);
         syncStoreStockRows(saved);
 
+        if (saved.getPrice() != null) {
+            productPriceHistoryRepository.save(new ProductPriceHistory(saved.getId(), saved.getPrice()));
+        }
+
         Map<String, Object> snapshot = productSnapshot(saved);
         activityLogService.log(admin, Module.PRODUCTS, PermissionAction.CREATE, AUDIT_ENTITY_TYPE, saved.getId(),
                 null, encode(snapshot), "Created product: " + saved.getTitle());
@@ -303,11 +317,20 @@ public class ProductService {
         validateRequestedStoreAccess(admin, request.getStoreIds());
 
         Map<String, Object> before = productSnapshot(product);
+        BigDecimal oldPrice = product.getPrice();
         applyRequest(product, request);
         validateImageCount(product.getImages().size());
         Product saved = productRepository.save(product);
         syncStoreStockRows(saved);
         Map<String, Object> after = productSnapshot(saved);
+
+        BigDecimal newPrice = saved.getPrice();
+        if (newPrice != null && (oldPrice == null || oldPrice.compareTo(newPrice) != 0)) {
+            productPriceHistoryRepository.save(new ProductPriceHistory(saved.getId(), newPrice));
+            if (oldPrice != null && newPrice.compareTo(oldPrice) < 0) {
+                eventPublisher.publishEvent(new PriceUpdatedEvent(this, saved.getId(), oldPrice, newPrice));
+            }
+        }
 
         Map<String, Object> oldDiff = new TreeMap<>();
         Map<String, Object> newDiff = new TreeMap<>();
@@ -413,7 +436,17 @@ public class ProductService {
                 if (request.getPriceAdjustmentPercent() == null) {
                     throw new BadRequestException("Price adjustment percentage is required");
                 }
-                products.forEach(product -> applyPriceAdjustment(product, request.getPriceAdjustmentPercent()));
+                products.forEach(product -> {
+                    BigDecimal oldPrice = product.getPrice();
+                    applyPriceAdjustment(product, request.getPriceAdjustmentPercent());
+                    BigDecimal newPrice = product.getPrice();
+                    if (newPrice != null && (oldPrice == null || oldPrice.compareTo(newPrice) != 0)) {
+                        productPriceHistoryRepository.save(new ProductPriceHistory(product.getId(), newPrice));
+                        if (oldPrice != null && newPrice.compareTo(oldPrice) < 0) {
+                            eventPublisher.publishEvent(new PriceUpdatedEvent(this, product.getId(), oldPrice, newPrice));
+                        }
+                    }
+                });
                 productRepository.saveAll(products);
             }
             case SET_FEATURED -> {
@@ -633,6 +666,7 @@ public class ProductService {
                 .gstRatePercent(product.getGstRatePercent())
                 .taxable(product.isTaxable())
                 .lowStockThreshold(product.getResolvedLowStockThreshold())
+                .leadTimeDays(product.getResolvedLeadTimeDays())
                 .description(product.getDescription())
                 .customAttributes(product.getCustomAttributes())
                 .stores(product.getStores().stream().map(this::toStoreSummaryResponse).toList())
@@ -649,7 +683,34 @@ public class ProductService {
                         .toList())
                 .createdAt(product.getCreatedAt())
                 .updatedAt(product.getUpdatedAt())
+                .lowestPrice90Days(calculateLowestPrice90Days(product.getId(), product.getPrice()))
                 .build();
+    }
+
+    private boolean calculateLowestPrice90Days(Long productId, BigDecimal currentPrice) {
+        if (currentPrice == null || productId == null || productPriceHistoryRepository == null) {
+            return false;
+        }
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(90);
+        List<ProductPriceHistory> history =
+                productPriceHistoryRepository.findByProductIdAndCreatedAtAfter(productId, cutoff);
+        if (history == null || history.isEmpty()) {
+            return false;
+        }
+        
+        boolean hasHigherPrice = false;
+        for (ProductPriceHistory record : history) {
+            BigDecimal histPrice = record.getPrice();
+            if (histPrice != null) {
+                if (histPrice.compareTo(currentPrice) < 0) {
+                    return false;
+                }
+                if (histPrice.compareTo(currentPrice) > 0) {
+                    hasHigherPrice = true;
+                }
+            }
+        }
+        return hasHigherPrice;
     }
 
     public StoreSummaryResponse toStoreSummaryResponse(Store store) {
@@ -767,6 +828,7 @@ public class ProductService {
         product.setGstRatePercent(request.getGstRatePercent());
         product.setTaxable(request.getTaxable() == null || request.getTaxable());
         product.setLowStockThreshold(resolvedLowStockThreshold == null ? 5 : resolvedLowStockThreshold);
+        product.setLeadTimeDays(request.getLeadTimeDays() != null ? request.getLeadTimeDays() : 7);
         product.setDescription(request.getDescription());
         product.setCustomAttributes(normalizeCustomAttributes(request.getCustomAttributes()));
     }

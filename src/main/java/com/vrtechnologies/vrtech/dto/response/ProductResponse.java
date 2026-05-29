@@ -61,6 +61,7 @@ public class ProductResponse {
     private BigDecimal gstRatePercent;
     private boolean taxable;
     private Integer lowStockThreshold;
+    private Integer leadTimeDays;
     private String description;
     private Map<String, Object> customAttributes;
     private List<StoreSummaryResponse> stores;
@@ -68,6 +69,7 @@ public class ProductResponse {
     private List<ProductImageResponse> images;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private boolean lowestPrice90Days;
 
     @JsonProperty("discountPercentage")
     public Integer getDiscountPercentage() {

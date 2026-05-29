@@ -25,6 +25,19 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
             Pageable pageable
     );
 
+    @Query("""
+            select oi.product.id as productId, sum(oi.quantity) as soldQuantity
+            from OrderItem oi
+            join oi.order o
+            where o.createdAt >= :startDate
+              and o.status not in :excludedStatuses
+            group by oi.product.id
+            """)
+    List<ProductSalesProjection> sumQuantitySoldSinceGroupedByProduct(
+            @Param("startDate") java.time.LocalDateTime startDate,
+            @Param("excludedStatuses") Collection<OrderStatus> excludedStatuses
+    );
+
     interface ProductSalesProjection {
         Long getProductId();
         Long getSoldQuantity();

@@ -58,6 +58,7 @@ public class CartService {
         item.setUser(user);
         item.setProduct(product);
         item.setQuantity(nextQuantity);
+        item.setRecoveryNotified(false);
         cartItemRepository.save(item);
         deleteDuplicateRows(item, matchingItems);
         return buildNormalizedCartResponse(user.getId());
@@ -73,6 +74,7 @@ public class CartService {
         int nextQuantity = getRequiredQuantity(request.getQuantity());
         validateQuantity(item.getProduct(), nextQuantity);
         item.setQuantity(nextQuantity);
+        item.setRecoveryNotified(false);
         cartItemRepository.save(item);
         deleteDuplicateRows(item, cartItemRepository.findAllByUserIdAndProductIdOrderByIdAsc(user.getId(), item.getProduct().getId()));
         return buildNormalizedCartResponse(user.getId());

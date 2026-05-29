@@ -17,6 +17,9 @@ public interface AdminPingRepository extends JpaRepository<AdminPing, Long> {
     // Fetch all pings ordered by timestamp ascending (chronological order)
     List<AdminPing> findAllByOrderByPingTimestampAsc();
 
+    // Fetch pings filtered by channel ordered by timestamp ascending
+    List<AdminPing> findByChannelOrderByPingTimestampAsc(String channel);
+
     // Delete selected pings based on list of IDs
     @Transactional
     @Modifying

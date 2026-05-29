@@ -7,6 +7,8 @@ import com.vrtechnologies.vrtech.dto.response.AuditLogEntryResponse;
 import com.vrtechnologies.vrtech.dto.response.PageResponse;
 import com.vrtechnologies.vrtech.dto.response.ProductResponse;
 import com.vrtechnologies.vrtech.dto.response.ProductImportResponse;
+import com.vrtechnologies.vrtech.dto.response.LowStockPredictionResponse;
+import com.vrtechnologies.vrtech.service.InventoryPredictionService;
 import com.vrtechnologies.vrtech.entity.AdminActivityLog;
 import com.vrtechnologies.vrtech.entity.User;
 import com.vrtechnologies.vrtech.entity.enums.Module;
@@ -48,19 +50,22 @@ public class AdminProductController {
     private final UserContextService userContextService;
     private final ProductImportExportService productImportExportService;
     private final AdminActivityLogService activityLogService;
+    private final InventoryPredictionService inventoryPredictionService;
 
     public AdminProductController(
             ProductService productService,
             PermissionService permissionService,
             UserContextService userContextService,
             ProductImportExportService productImportExportService,
-            AdminActivityLogService activityLogService
+            AdminActivityLogService activityLogService,
+            InventoryPredictionService inventoryPredictionService
     ) {
         this.productService = productService;
         this.permissionService = permissionService;
         this.userContextService = userContextService;
         this.productImportExportService = productImportExportService;
         this.activityLogService = activityLogService;
+        this.inventoryPredictionService = inventoryPredictionService;
     }
 
     @GetMapping
@@ -95,6 +100,13 @@ public class AdminProductController {
         ));
     }
 
+    @GetMapping("/predictions")
+    public ApiResponse<List<LowStockPredictionResponse>> lowStockPredictions() {
+        User admin = currentAdmin();
+        permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.VIEW);
+        return ApiResponse.ok("Low stock predictions fetched", inventoryPredictionService.getPredictions());
+    }
+
     @GetMapping("/{id}")
     public ApiResponse<ProductResponse> product(@PathVariable Long id) {
         User admin = currentAdmin();
@@ -113,6 +125,9 @@ public class AdminProductController {
     public ApiResponse<ProductResponse> update(@PathVariable Long id, @Valid @RequestBody ProductRequest request) {
         User admin = currentAdmin();
         permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.UPDATE);
+        if (RealtimeAdminController.isResourceHardLocked("product:" + id, admin.getEmail())) {
+            return ApiResponse.error("This product is hard-locked by another administrator editing it.", null);
+        }
         return ApiResponse.ok("Product updated", productService.updateProduct(admin, id, request));
     }
 
@@ -148,6 +163,9 @@ public class AdminProductController {
     public ApiResponse<Object> delete(@PathVariable Long id) {
         User admin = currentAdmin();
         permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.DELETE);
+        if (RealtimeAdminController.isResourceHardLocked("product:" + id, admin.getEmail())) {
+            return ApiResponse.error("This product is hard-locked by another administrator editing it.", null);
+        }
         productService.deleteProduct(admin, id);
         return ApiResponse.ok("Product deleted", null);
     }
@@ -163,6 +181,9 @@ public class AdminProductController {
     public ApiResponse<ProductResponse> uploadImage(@PathVariable Long id, @RequestParam("file") MultipartFile file) {
         User admin = currentAdmin();
         permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.UPDATE);
+        if (RealtimeAdminController.isResourceHardLocked("product:" + id, admin.getEmail())) {
+            return ApiResponse.error("This product is hard-locked by another administrator editing it.", null);
+        }
         return ApiResponse.ok("Image uploaded", productService.uploadProductImage(admin, id, file));
     }
 
@@ -170,6 +191,9 @@ public class AdminProductController {
     public ApiResponse<ProductResponse> deleteImage(@PathVariable Long id, @PathVariable Long imageId) {
         User admin = currentAdmin();
         permissionService.requirePermission(admin, Module.PRODUCTS, PermissionAction.UPDATE);
+        if (RealtimeAdminController.isResourceHardLocked("product:" + id, admin.getEmail())) {
+            return ApiResponse.error("This product is hard-locked by another administrator editing it.", null);
+        }
         return ApiResponse.ok("Image deleted", productService.deleteProductImage(admin, id, imageId));
     }
 

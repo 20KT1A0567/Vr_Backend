@@ -25,19 +25,97 @@ public class AdminEngagementService {
     private final PermissionService permissionService;
     private final ProductService productService;
     private final NotificationService notificationService;
+    private final SseEmitterService sseEmitterService;
 
     public AdminEngagementService(
             CartItemRepository cartItemRepository,
             WishlistItemRepository wishlistItemRepository,
             PermissionService permissionService,
             ProductService productService,
-            NotificationService notificationService
+            NotificationService notificationService,
+            SseEmitterService sseEmitterService
     ) {
         this.cartItemRepository = cartItemRepository;
         this.wishlistItemRepository = wishlistItemRepository;
         this.permissionService = permissionService;
         this.productService = productService;
         this.notificationService = notificationService;
+        this.sseEmitterService = sseEmitterService;
+    }
+
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelayString = "${app.cart-recovery.sweep-delay-ms:30000}")
+    @Transactional
+    public void sweepAbandonedCarts() {
+        // Look back threshold, default is 15 minutes. For local testing we check anything idle for 1 minute or more.
+        int thresholdMinutes = 15;
+        java.time.LocalDateTime cutoff = java.time.LocalDateTime.now().minusMinutes(thresholdMinutes);
+        
+        List<CartItem> abandonedItems = cartItemRepository.findAll().stream()
+                .filter(item -> !Boolean.TRUE.equals(item.getRecoveryNotified()))
+                .filter(item -> item.getUpdatedAt() != null && item.getUpdatedAt().isBefore(cutoff))
+                .toList();
+                
+        if (abandonedItems.isEmpty()) {
+            return;
+        }
+        
+        java.util.Map<User, List<CartItem>> groupedByUser = abandonedItems.stream()
+                .filter(item -> item.getUser() != null)
+                .collect(java.util.stream.Collectors.groupingBy(CartItem::getUser));
+                
+        for (java.util.Map.Entry<User, List<CartItem>> entry : groupedByUser.entrySet()) {
+            User user = entry.getKey();
+            List<CartItem> items = entry.getValue();
+            
+            for (CartItem item : items) {
+                item.setRecoveryNotified(true);
+                cartItemRepository.save(item);
+            }
+            
+            java.math.BigDecimal total = items.stream()
+                    .map(item -> {
+                        java.math.BigDecimal price = item.getProduct().getPrice();
+                        if (price == null) price = java.math.BigDecimal.ZERO;
+                        return price.multiply(java.math.BigDecimal.valueOf(item.getQuantity() == null ? 0 : item.getQuantity()));
+                    })
+                    .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+            
+            String itemsSummary = items.stream()
+                    .map(item -> (item.getQuantity() == null ? 1 : item.getQuantity()) + "x " + item.getProduct().getTitle())
+                    .collect(java.util.stream.Collectors.joining(", "));
+            
+            String subject = "Cart Abandoned: " + user.getName();
+            String msg = user.getName() + " left items in cart worth Rs. " + total + ": " + itemsSummary;
+            notificationService.logInApp("CART_ABANDONED", subject, msg, null);
+            
+            try {
+                com.vrtechnologies.vrtech.dto.event.SystemEvent sseEvent = com.vrtechnologies.vrtech.dto.event.SystemEvent.builder()
+                        .eventType("CART_ABANDONED")
+                        .title("Cart Abandoned")
+                        .message(user.getName() + " abandoned a cart of Rs. " + total)
+                        .severity("WARNING")
+                        .payload(java.util.Map.of(
+                                "userId", user.getId(),
+                                "customerName", user.getName(),
+                                "customerPhone", user.getPhone() != null ? user.getPhone() : "",
+                                "customerEmail", user.getEmail() != null ? user.getEmail() : "",
+                                "totalValue", total,
+                                "itemsCount", items.size(),
+                                "cartItems", items.stream().map(item -> java.util.Map.of(
+                                        "id", item.getId(),
+                                        "productId", item.getProduct().getId(),
+                                        "title", item.getProduct().getTitle(),
+                                        "price", item.getProduct().getPrice() != null ? item.getProduct().getPrice() : 0,
+                                        "quantity", item.getQuantity() != null ? item.getQuantity() : 1
+                                )).toList()
+                        ))
+                        .timestamp(java.time.LocalDateTime.now())
+                        .build();
+                sseEmitterService.broadcast(sseEvent);
+            } catch (Exception e) {
+                // Suppress to ensure scheduling loop is not broken
+            }
+        }
     }
 
     @Transactional(readOnly = true)

@@ -34,4 +34,23 @@ public class CartItem {
 
     @Column(nullable = false)
     private Integer quantity = 1;
+
+    @Column(name = "updated_at")
+    private java.time.LocalDateTime updatedAt;
+
+    @Column(name = "recovery_notified", nullable = false)
+    private Boolean recoveryNotified = false;
+
+    @jakarta.persistence.PrePersist
+    protected void onCreate() {
+        updatedAt = java.time.LocalDateTime.now();
+        if (recoveryNotified == null) {
+            recoveryNotified = false;
+        }
+    }
+
+    @jakarta.persistence.PreUpdate
+    protected void onUpdate() {
+        updatedAt = java.time.LocalDateTime.now();
+    }
 }

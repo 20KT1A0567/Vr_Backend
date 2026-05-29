@@ -155,6 +155,13 @@ public class Product extends BaseEntity {
 
     private Integer lowStockThreshold;
 
+    @Column(name = "lead_time_days")
+    private Integer leadTimeDays = 7;
+
+    public int getResolvedLeadTimeDays() {
+        return leadTimeDays == null ? 7 : leadTimeDays;
+    }
+
     @Column(columnDefinition = "TEXT")
     private String description;
 

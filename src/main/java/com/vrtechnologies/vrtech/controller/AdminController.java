@@ -827,6 +827,15 @@ public class AdminController {
         return ApiResponse.ok("Notifications fetched", notificationService.latest());
     }
 
+    @GetMapping("/notifications/unread")
+    public ApiResponse<List<NotificationLog>> unreadNotifications() {
+        requirePermission(currentAdmin(), Module.SETTINGS, PermissionAction.VIEW);
+        List<NotificationLog> unread = notificationService.latest().stream()
+                .filter(log -> !log.isRead())
+                .toList();
+        return ApiResponse.ok("Unread notifications fetched", unread);
+    }
+
     @GetMapping("/export-center")
     public ApiResponse<ExportManifestResponse> exportCenter() {
         requirePermission(currentAdmin(), Module.SETTINGS, PermissionAction.VIEW);

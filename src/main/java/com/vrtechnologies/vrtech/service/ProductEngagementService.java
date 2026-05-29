@@ -20,6 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import com.vrtechnologies.vrtech.dto.event.PriceUpdatedEvent;
+import org.springframework.context.event.EventListener;
 
 @Service
 public class ProductEngagementService {
@@ -100,6 +102,39 @@ public class ProductEngagementService {
                     alert.getEmail(),
                     "Price dropped: " + alert.getProduct().getTitle(),
                     "The price is now Rs. " + current + ".",
+                    null
+            );
+            alert.setStatus("NOTIFIED");
+            alert.setNotifiedAt(java.time.LocalDateTime.now());
+            priceDropAlertRepository.save(alert);
+        }
+    }
+
+    @EventListener
+    @Transactional
+    public void handlePriceUpdatedEvent(PriceUpdatedEvent event) {
+        Long productId = event.getProductId();
+        BigDecimal newPrice = event.getNewPrice();
+        if (productId == null || newPrice == null) {
+            return;
+        }
+        
+        List<PriceDropAlert> waitingAlerts = priceDropAlertRepository.findAll().stream()
+                .filter(alert -> "WAITING".equals(alert.getStatus()))
+                .filter(alert -> alert.getProduct() != null && productId.equals(alert.getProduct().getId()))
+                .toList();
+
+        for (PriceDropAlert alert : waitingAlerts) {
+            BigDecimal target = alert.getTargetPrice();
+            if (target != null && newPrice.compareTo(target) > 0) {
+                continue;
+            }
+            notificationService.log(
+                    "PRICE_DROP",
+                    "EMAIL",
+                    alert.getEmail(),
+                    "Price dropped: " + alert.getProduct().getTitle(),
+                    "The price is now Rs. " + newPrice + ".",
                     null
             );
             alert.setStatus("NOTIFIED");

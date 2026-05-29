@@ -168,6 +168,13 @@ public class SchemaCompatibilityConfig {
             migrate(jdbcTemplate, "ALTER TABLE users ADD COLUMN totp_secret VARCHAR(32) NULL");
             migrate(jdbcTemplate, "ALTER TABLE site_settings ADD COLUMN admin_allowed_ips TEXT NULL");
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS user_password_histories (id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NOT NULL, password_hash VARCHAR(255) NOT NULL, created_at DATETIME NOT NULL, PRIMARY KEY (id))");
+
+            // Phase 3 Schema compatibility updates
+            migrate(jdbcTemplate, "ALTER TABLE cart_items ADD COLUMN updated_at DATETIME NULL");
+            migrate(jdbcTemplate, "ALTER TABLE cart_items ADD COLUMN recovery_notified BIT NOT NULL DEFAULT 0");
+            migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS product_price_history (id BIGINT NOT NULL AUTO_INCREMENT, product_id BIGINT NOT NULL, price DECIMAL(10,2) NOT NULL, created_at DATETIME NOT NULL, PRIMARY KEY (id))");
+            migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS push_subscriptions (id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NULL, endpoint VARCHAR(1024) NOT NULL, p256dh VARCHAR(256) NOT NULL, auth VARCHAR(256) NOT NULL, user_agent VARCHAR(512) NULL, created_at DATETIME NOT NULL, PRIMARY KEY (id))");
+            migrate(jdbcTemplate, "ALTER TABLE products ADD COLUMN lead_time_days INT NULL DEFAULT 7");
         };
     }
 

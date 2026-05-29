@@ -82,6 +82,7 @@ public class ProductRequest {
     private BigDecimal gstRatePercent;
     private Boolean taxable;
     private Integer lowStockThreshold;
+    private Integer leadTimeDays;
     private String description;
     private Map<String, Object> customAttributes;
 

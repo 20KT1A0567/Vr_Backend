@@ -37,6 +37,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.vrtechnologies.vrtech.service.UserContextService;
+import com.vrtechnologies.vrtech.entity.User;
+import java.util.Map;
+
 import java.util.List;
 
 @RestController
@@ -46,10 +50,16 @@ public class SuperAdminController {
 
     private final SuperAdminService superAdminService;
     private final StoreRepository storeRepository;
+    private final UserContextService userContextService;
 
-    public SuperAdminController(SuperAdminService superAdminService, StoreRepository storeRepository) {
+    public SuperAdminController(
+            SuperAdminService superAdminService,
+            StoreRepository storeRepository,
+            UserContextService userContextService
+    ) {
         this.superAdminService = superAdminService;
         this.storeRepository = storeRepository;
+        this.userContextService = userContextService;
     }
 
     @GetMapping("/admins")
@@ -145,11 +155,19 @@ public class SuperAdminController {
 
     @PutMapping("/roles/{roleKey}")
     public ApiResponse<RolePermissionsResponse> updateRole(@PathVariable String roleKey, @Valid @RequestBody AdminRoleUpdateRequest request) {
+        User admin = currentAdmin();
+        if (RealtimeAdminController.isResourceHardLocked("role:" + roleKey, admin.getEmail())) {
+            return ApiResponse.error("This role archetype is hard-locked by another administrator.", null);
+        }
         return ApiResponse.ok("Role updated", superAdminService.updateRole(roleKey, request));
     }
 
     @DeleteMapping("/roles/{roleKey}")
     public ApiResponse<Object> deleteRole(@PathVariable String roleKey) {
+        User admin = currentAdmin();
+        if (RealtimeAdminController.isResourceHardLocked("role:" + roleKey, admin.getEmail())) {
+            return ApiResponse.error("This role archetype is hard-locked by another administrator.", null);
+        }
         superAdminService.deleteRole(roleKey);
         return ApiResponse.ok("Role deleted", null);
     }
@@ -161,6 +179,10 @@ public class SuperAdminController {
 
     @PutMapping("/roles/{roleKey}/permissions")
     public ApiResponse<RolePermissionsResponse> updateRolePermissions(@PathVariable String roleKey, @RequestBody RolePermissionsRequest request) {
+        User admin = currentAdmin();
+        if (RealtimeAdminController.isResourceHardLocked("role:" + roleKey, admin.getEmail())) {
+            return ApiResponse.error("This role archetype is hard-locked by another administrator.", null);
+        }
         return ApiResponse.ok("Role permissions updated", superAdminService.setRolePermissions(roleKey, request));
     }
 
@@ -172,5 +194,9 @@ public class SuperAdminController {
     @GetMapping("/stores")
     public ApiResponse<List<Store>> stores() {
         return ApiResponse.ok("Stores fetched", storeRepository.findAllByOrderByCityAscNameAsc());
+    }
+
+    private User currentAdmin() {
+        return userContextService.getCurrentUser();
     }
 }

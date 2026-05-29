@@ -39,6 +39,10 @@ public class AdminPing extends BaseEntity {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String message;
 
+    @Builder.Default
+    @Column(name = "channel", nullable = false, length = 50)
+    private String channel = "general";
+
     @Column(name = "ping_timestamp", nullable = false)
     private LocalDateTime pingTimestamp;
 }

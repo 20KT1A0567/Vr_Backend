@@ -1,0 +1,1 @@
+ALTER TABLE admin_pings ADD COLUMN channel VARCHAR(50) DEFAULT 'general' NOT NULL;

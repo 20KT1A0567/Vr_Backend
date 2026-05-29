@@ -446,13 +446,17 @@ public class PincodeDeliveryService {
     }
 
     private PincodeLocation resolveLocation(String pincode) {
+        // 1. Check DB cache first (instant)
         try {
             Optional<PincodeApiCache> cached = pincodeApiCacheRepository.findById(pincode);
             if (cached.isPresent()) {
                 PincodeApiCache cache = cached.get();
                 return new PincodeLocation(cache.getPincode(), cache.getStateName(), cache.getDistrictName(), cache.getCityName());
             }
+        } catch (Exception ignored) {}
 
+        // 2. Try India Post API
+        try {
             RestTemplate restTemplate = createSslIgnoringRestTemplate();
             String url = "https://api.postalpincode.in/pincode/" + pincode;
             PostOfficeResponse[] responses = restTemplate.getForObject(url, PostOfficeResponse[].class);
@@ -483,6 +487,109 @@ public class PincodeDeliveryService {
         } catch (Exception exception) {
             org.slf4j.LoggerFactory.getLogger(PincodeDeliveryService.class)
                     .warn("PostOffice API error for pincode {}: {}", pincode, exception.getMessage());
+        }
+
+        // 3. Fallback: local pincode prefix → state mapping (always works, no API dependency)
+        return resolveLocationFromPrefix(pincode);
+    }
+
+    /**
+     * Local Indian pincode prefix → state mapping.
+     * Indian pincodes follow a standard pattern where the first 2-3 digits indicate
+     * the state and postal circle. This provides instant location resolution
+     * without depending on any external API.
+     */
+    private PincodeLocation resolveLocationFromPrefix(String pincode) {
+        if (pincode == null || pincode.length() < 2) return null;
+        String prefix2 = pincode.substring(0, 2);
+        String prefix3 = pincode.length() >= 3 ? pincode.substring(0, 3) : null;
+
+        // Indian Postal Index: first digit = zone, first 2-3 digits = state/circle
+        String state = null;
+        switch (prefix2) {
+            // Zone 1: Delhi, Haryana, Punjab, HP, J&K, Chandigarh
+            case "11": state = "Delhi"; break;
+            case "12": case "13": state = "Haryana"; break;
+            case "14": case "15": state = "Punjab"; break;
+            case "16": state = "Punjab"; break;
+            case "17": state = "Himachal Pradesh"; break;
+            case "18": case "19": state = "Jammu and Kashmir"; break;
+            // Zone 2: Uttar Pradesh, Uttarakhand
+            case "20": case "21": case "22": case "23": case "24": case "25": case "26": case "27": case "28":
+                if (prefix3 != null && (prefix3.equals("244") || prefix3.equals("245") || prefix3.equals("246") || prefix3.equals("247") || prefix3.equals("248") || prefix3.equals("249") || prefix3.equals("263"))) {
+                    state = "Uttarakhand";
+                } else {
+                    state = "Uttar Pradesh";
+                }
+                break;
+            // Zone 3: Rajasthan, Gujarat
+            case "30": case "31": case "32": case "33": case "34": state = "Rajasthan"; break;
+            case "36": case "37": case "38": case "39": state = "Gujarat"; break;
+            case "35": state = "Gujarat"; break;
+            // Zone 4: Maharashtra, Goa, Madhya Pradesh, Chhattisgarh
+            case "40": case "41": case "42": case "43": case "44":
+                if (prefix3 != null && prefix3.equals("403")) {
+                    state = "Goa";
+                } else {
+                    state = "Maharashtra";
+                }
+                break;
+            case "45": case "46": case "47":
+                if (prefix3 != null && (prefix3.equals("490") || prefix3.equals("491") || prefix3.equals("492") || prefix3.equals("493") || prefix3.equals("494") || prefix3.equals("495") || prefix3.equals("496") || prefix3.equals("497"))) {
+                    state = "Chhattisgarh";
+                } else {
+                    state = "Madhya Pradesh";
+                }
+                break;
+            case "48": case "49":
+                if (prefix3 != null && (prefix3.equals("490") || prefix3.equals("491") || prefix3.equals("492") || prefix3.equals("493") || prefix3.equals("494") || prefix3.equals("495") || prefix3.equals("496") || prefix3.equals("497"))) {
+                    state = "Chhattisgarh";
+                } else {
+                    state = "Madhya Pradesh";
+                }
+                break;
+            // Zone 5: Andhra Pradesh, Telangana, Karnataka
+            case "50": state = "Telangana"; break;
+            case "51": case "52": case "53": state = "Andhra Pradesh"; break;
+            case "56": case "57": case "58": case "59": state = "Karnataka"; break;
+            case "54": case "55": state = "Karnataka"; break;
+            // Zone 6: Tamil Nadu, Kerala, Puducherry
+            case "60": case "61": case "62": case "63": case "64": state = "Tamil Nadu"; break;
+            case "67": case "68": case "69": state = "Kerala"; break;
+            case "65": case "66": state = "Tamil Nadu"; break;
+            // Zone 7: West Bengal, Odisha, NE States, Sikkim
+            case "70": case "71": case "72": case "73": case "74": state = "West Bengal"; break;
+            case "75": case "76": case "77": state = "Odisha"; break;
+            case "78": state = "Assam"; break;
+            case "79":
+                if (prefix3 != null) {
+                    if (prefix3.equals("790") || prefix3.equals("791") || prefix3.equals("792")) state = "Arunachal Pradesh";
+                    else if (prefix3.equals("793") || prefix3.equals("794")) state = "Meghalaya";
+                    else if (prefix3.equals("795")) state = "Manipur";
+                    else if (prefix3.equals("796")) state = "Mizoram";
+                    else if (prefix3.equals("797") || prefix3.equals("798")) state = "Nagaland";
+                    else if (prefix3.equals("799")) state = "Tripura";
+                    else state = "Northeast India";
+                } else {
+                    state = "Northeast India";
+                }
+                break;
+            // Zone 8: Bihar, Jharkhand
+            case "80": case "81": case "82": case "83": case "84": case "85":
+                if (prefix3 != null && (prefix3.equals("825") || prefix3.equals("826") || prefix3.equals("827") || prefix3.equals("828") || prefix3.equals("829") ||
+                        prefix3.equals("831") || prefix3.equals("832") || prefix3.equals("833") || prefix3.equals("834") || prefix3.equals("835") ||
+                        prefix3.equals("836"))) {
+                    state = "Jharkhand";
+                } else {
+                    state = "Bihar";
+                }
+
+            default:
+                break;
+        }
+
+        if (state != null) {
+            return new PincodeLocation(pincode, state, null, null);
         }
         return null;
     }

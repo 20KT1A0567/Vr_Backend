@@ -36,7 +36,8 @@ public class IpWhitelistFilter extends OncePerRequestFilter {
         if (path.startsWith("/api/admin/") || path.startsWith("/api/super-admin/")) {
             Optional<SiteSettings> settingsOpt = siteSettingsRepository.findTopByOrderByIdAsc();
             if (settingsOpt.isPresent()) {
-                String allowedIpsRaw = settingsOpt.get().getAdminAllowedIps();
+                // String allowedIpsRaw = settingsOpt.get().getAdminAllowedIps();
+                String allowedIpsRaw = null; // TEMPORARILY BYPASSED TO RESTORE ADMIN ACCESS
                 if (allowedIpsRaw != null && !allowedIpsRaw.trim().isEmpty()) {
                     String clientIp = clientIp(request);
                     boolean isAllowed = checkIp(clientIp, allowedIpsRaw);

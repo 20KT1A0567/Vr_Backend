@@ -10,5 +10,6 @@ import java.util.List;
 @Repository
 public interface ProductPriceHistoryRepository extends JpaRepository<ProductPriceHistory, Long> {
     List<ProductPriceHistory> findByProductIdAndCreatedAtAfter(Long productId, LocalDateTime cutoff);
+    List<ProductPriceHistory> findByProductIdInAndCreatedAtAfter(List<Long> productIds, LocalDateTime cutoff);
     List<ProductPriceHistory> findByProductId(Long productId);
 }

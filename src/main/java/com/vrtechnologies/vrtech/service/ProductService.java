@@ -170,10 +170,8 @@ public class ProductService {
                 .and(minPrice(minPrice))
                 .and(maxPrice(maxPrice));
 
-        return productRepository.findAll(specification, Sort.by(Sort.Direction.DESC, "updatedAt"))
-                .stream()
-                .map(this::toProductResponse)
-                .toList();
+        List<Product> products = productRepository.findAll(specification, Sort.by(Sort.Direction.DESC, "updatedAt"));
+        return toProductResponseList(products);
     }
 
     public List<ProductResponse> getAllProductsForAdmin(User admin) {
@@ -208,9 +206,8 @@ public class ProductService {
                 .and(minPrice(minPrice))
                 .and(maxPrice(maxPrice));
 
-        return productRepository.findAll(specification, Sort.by(Sort.Direction.DESC, "updatedAt")).stream()
-                .map(this::toProductResponse)
-                .toList();
+        List<Product> products = productRepository.findAll(specification, Sort.by(Sort.Direction.DESC, "updatedAt"));
+        return toProductResponseList(products);
     }
 
     public ProductResponse getAdminProduct(User admin, Long id) {
@@ -225,35 +222,36 @@ public class ProductService {
     }
 
     public List<ProductResponse> getFeaturedProducts(int limit) {
-        return listPublicProductsSorted(Sort.by(Sort.Order.asc("displayOrder"), Sort.Order.desc("updatedAt"))).stream()
+        List<Product> featured = listPublicProductsSorted(Sort.by(Sort.Order.asc("displayOrder"), Sort.Order.desc("updatedAt"))).stream()
                 .filter(Product::isFeatured)
                 .limit(normalizeLimit(limit))
-                .map(this::toProductResponse)
                 .toList();
+        return toProductResponseList(featured);
     }
 
     public List<ProductResponse> getFlaggedBestSellers(int limit) {
-        return listPublicProductsSorted(Sort.by(Sort.Order.asc("displayOrder"), Sort.Order.desc("updatedAt"))).stream()
+        List<Product> bestSellers = listPublicProductsSorted(Sort.by(Sort.Order.asc("displayOrder"), Sort.Order.desc("updatedAt"))).stream()
                 .filter(Product::isBestSellerEnabled)
                 .sorted(Comparator
                         .comparingInt(Product::getResolvedDisplayOrder)
                         .thenComparing(Product::getUpdatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(normalizeLimit(limit))
-                .map(this::toProductResponse)
                 .toList();
+        return toProductResponseList(bestSellers);
     }
 
     public List<ProductResponse> getNewArrivals(int limit) {
-        return listPublicProductsSorted(Sort.by(Sort.Direction.DESC, "createdAt")).stream()
+        List<Product> arrivals = listPublicProductsSorted(Sort.by(Sort.Direction.DESC, "createdAt")).stream()
                 .limit(normalizeLimit(limit))
-                .map(this::toProductResponse)
                 .toList();
+        return toProductResponseList(arrivals);
     }
 
     public List<ProductResponse> getTodaysDeals(int limit) {
         LocalDateTime now = LocalDateTime.now();
-        return listPublicProductsSorted(Sort.by(Sort.Order.asc("displayOrder"), Sort.Order.desc("updatedAt"))).stream()
-                .map(this::toProductResponse)
+        List<Product> products = listPublicProductsSorted(Sort.by(Sort.Order.asc("displayOrder"), Sort.Order.desc("updatedAt")));
+        List<ProductResponse> mapped = toProductResponseList(products);
+        return mapped.stream()
                 .filter(product -> isDealActive(product, now))
                 .sorted(Comparator
                         .comparingInt((ProductResponse product) -> product.getDisplayOrder() == null ? 0 : product.getDisplayOrder())
@@ -619,6 +617,71 @@ public class ProductService {
     }
 
     public ProductResponse toProductResponse(Product product) {
+        if (product == null) {
+            return null;
+        }
+        List<ProductResponse> list = toProductResponseList(List.of(product));
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    public List<ProductResponse> toProductResponseList(List<Product> products) {
+        if (products == null || products.isEmpty()) {
+            return List.of();
+        }
+
+        List<Long> productIds = products.stream()
+                .map(Product::getId)
+                .filter(Objects::nonNull)
+                .toList();
+
+        Map<Long, Map<Long, Integer>> stocksMap = new java.util.LinkedHashMap<>();
+        Map<Long, List<ProductPriceHistory>> historiesMap = new java.util.LinkedHashMap<>();
+
+        if (!productIds.isEmpty()) {
+            try {
+                List<com.vrtechnologies.vrtech.entity.ProductStoreStock> stocks = productStoreStockRepository.findByProductIdIn(productIds);
+                if (stocks != null) {
+                    stocksMap = stocks.stream()
+                            .filter(s -> s.getProduct() != null && s.getStore() != null)
+                            .collect(Collectors.groupingBy(
+                                    s -> s.getProduct().getId(),
+                                    Collectors.toMap(
+                                            s -> s.getStore().getId(),
+                                            s -> s.getStockQuantity() == null ? 0 : s.getStockQuantity(),
+                                            (existing, replacement) -> existing
+                                    )
+                            ));
+                }
+            } catch (Exception e) {
+                // fallback
+            }
+
+            try {
+                LocalDateTime cutoff = LocalDateTime.now().minusDays(90);
+                List<ProductPriceHistory> histories = productPriceHistoryRepository.findByProductIdInAndCreatedAtAfter(productIds, cutoff);
+                if (histories != null) {
+                    historiesMap = histories.stream()
+                            .filter(h -> h.getProductId() != null)
+                            .collect(Collectors.groupingBy(ProductPriceHistory::getProductId));
+                }
+            } catch (Exception e) {
+                // fallback
+            }
+        }
+
+        final Map<Long, Map<Long, Integer>> finalStocksMap = stocksMap;
+        final Map<Long, List<ProductPriceHistory>> finalHistoriesMap = historiesMap;
+
+        return products.stream()
+                .map(p -> toProductResponseOptimized(
+                        p,
+                        finalStocksMap.getOrDefault(p.getId(), Map.of()),
+                        finalHistoriesMap.getOrDefault(p.getId(), List.of())
+                ))
+                .toList();
+    }
+
+    private ProductResponse toProductResponseOptimized(Product product, Map<Long, Integer> productStocks, List<ProductPriceHistory> productHistory) {
         return ProductResponse.builder()
                 .id(product.getId())
                 .title(product.getTitle())
@@ -670,7 +733,7 @@ public class ProductService {
                 .description(product.getDescription())
                 .customAttributes(product.getCustomAttributes())
                 .stores(product.getStores().stream().map(this::toStoreSummaryResponse).toList())
-                .storeAvailability(product.getStores().stream().map(store -> toStoreAvailabilityResponse(product, store)).toList())
+                .storeAvailability(product.getStores().stream().map(store -> toStoreAvailabilityResponseOptimized(product, store, productStocks)).toList())
                 .images(product.getImages().stream()
                         .sorted(Comparator.comparing(ProductImage::getSortOrder).thenComparing(ProductImage::getId))
                         .map(image -> ProductImageResponse.builder()
@@ -683,8 +746,27 @@ public class ProductService {
                         .toList())
                 .createdAt(product.getCreatedAt())
                 .updatedAt(product.getUpdatedAt())
-                .lowestPrice90Days(calculateLowestPrice90Days(product.getId(), product.getPrice()))
+                .lowestPrice90Days(calculateLowestPrice90DaysOptimized(product.getPrice(), productHistory))
                 .build();
+    }
+
+    private boolean calculateLowestPrice90DaysOptimized(BigDecimal currentPrice, List<ProductPriceHistory> history) {
+        if (currentPrice == null || history == null || history.isEmpty()) {
+            return false;
+        }
+        boolean hasHigherPrice = false;
+        for (ProductPriceHistory record : history) {
+            BigDecimal histPrice = record.getPrice();
+            if (histPrice != null) {
+                if (histPrice.compareTo(currentPrice) < 0) {
+                    return false;
+                }
+                if (histPrice.compareTo(currentPrice) > 0) {
+                    hasHigherPrice = true;
+                }
+            }
+        }
+        return hasHigherPrice;
     }
 
     private boolean calculateLowestPrice90Days(Long productId, BigDecimal currentPrice) {
@@ -731,6 +813,24 @@ public class ProductService {
                 .googleRating(store.getGoogleRating())
                 .googleReviewCount(store.getGoogleReviewCount())
                 .active(store.isActive())
+                .build();
+    }
+
+    private StoreAvailabilityResponse toStoreAvailabilityResponseOptimized(Product product, Store store, Map<Long, Integer> productStocks) {
+        int stock = 0;
+        if (productStocks != null && productStocks.containsKey(store.getId())) {
+            stock = productStocks.get(store.getId());
+        } else {
+            stock = product.getStores().stream().findFirst().map(firstStore ->
+                    firstStore.getId().equals(store.getId()) ? (product.getStockQuantity() == null ? 0 : product.getStockQuantity()) : 0
+            ).orElse(product.getStockQuantity() == null ? 0 : product.getStockQuantity());
+        }
+        return StoreAvailabilityResponse.builder()
+                .storeId(store.getId())
+                .storeName(store.getName())
+                .city(store.getCity())
+                .stockQuantity(stock)
+                .available(store.isActive() && product.isAvailable() && stock > 0)
                 .build();
     }
 

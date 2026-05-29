@@ -284,6 +284,9 @@ public class PincodeDeliveryService {
                 .ruleId(resolution.getRuleId())
                 .ruleSource(resolution.getRuleSource())
                 .message(resolution.getMessage())
+                .stateName(stateName)
+                .districtName(districtName)
+                .cityName(cityName)
                 .build();
     }
 

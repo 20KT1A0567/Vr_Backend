@@ -26,4 +26,7 @@ public class PincodeDeliveryCheckResponse {
     private Long ruleId;
     private String ruleSource;
     private String message;
+    private String stateName;
+    private String districtName;
+    private String cityName;
 }

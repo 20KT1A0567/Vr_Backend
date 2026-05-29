@@ -84,7 +84,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/payments/webhooks/razorpay").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/orders/guest", "/api/courier/webhooks/status").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/products/**", "/api/users/wishlist/*","/api/brands/**", "/api/categories/**", "/api/stores/**", "/api/banners/**", "/api/settings/public", "/api/delivery/pincode/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/products/**", "/api/users/wishlist/*","/api/brands/**", "/api/categories/**", "/api/stores/**", "/api/banners/**", "/api/settings/public", "/api/delivery/pincode/**", "/api/seo/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/enquiries").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/products/back-in-stock", "/api/products/recently-viewed", "/api/products/price-drop-alerts").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/coupons/validate").permitAll()

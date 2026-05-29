@@ -138,11 +138,23 @@ jobs:
           chmod +x /tmp/deploy.sh
 
       - name: Copy files to EC2
+        env:
+          EC2_USER_RAW: ${{ secrets.EC2_USER }}
+          EC2_HOST_RAW: ${{ secrets.EC2_HOST }}
         run: |
-          ssh -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "mkdir -p ~/vr-backend"
-          scp -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no /tmp/app.env "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/vr-backend/.env"
-          scp -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no /tmp/deploy.sh "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/deploy.sh"
+          EC2_USER=$(printf '%s' "$EC2_USER_RAW" | tr -d '\r\n')
+          EC2_HOST=$(printf '%s' "$EC2_HOST_RAW" | tr -d '\r\n')
+          echo "Connecting to: $EC2_USER@$EC2_HOST"
+          ssh -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" "mkdir -p ~/vr-backend"
+          scp -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no /tmp/app.env "$EC2_USER@$EC2_HOST:~/vr-backend/.env"
+          scp -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no /tmp/deploy.sh "$EC2_USER@$EC2_HOST:~/deploy.sh"
           echo "Files copied to EC2 successfully"
 
       - name: Run deploy script on EC2
-        run: ssh -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "bash ~/deploy.sh"
+        env:
+          EC2_USER_RAW: ${{ secrets.EC2_USER }}
+          EC2_HOST_RAW: ${{ secrets.EC2_HOST }}
+        run: |
+          EC2_USER=$(printf '%s' "$EC2_USER_RAW" | tr -d '\r\n')
+          EC2_HOST=$(printf '%s' "$EC2_HOST_RAW" | tr -d '\r\n')
+          ssh -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" "bash ~/deploy.sh"

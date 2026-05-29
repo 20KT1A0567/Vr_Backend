@@ -223,12 +223,9 @@ public class PincodeDeliveryService {
         PincodeLocation loc = resolution.getLocation();
         if (loc == null) {
             try {
-                // If it was skipped by prefix match, only check local cache to avoid external API calls
-                Optional<PincodeApiCache> cached = pincodeApiCacheRepository.findById(normalizedPincode);
-                if (cached.isPresent()) {
-                    PincodeApiCache cache = cached.get();
-                    loc = new PincodeLocation(normalizedPincode, cache.getStateName(), cache.getDistrictName(), cache.getCityName());
-                }
+                // resolveLocation checks DB cache first (instant), then calls India Post API
+                // for new pincodes that haven't been cached yet (e.g. prefix-zone matches)
+                loc = resolveLocation(normalizedPincode);
             } catch (Exception ignored) {}
         }
 

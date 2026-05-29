@@ -17,6 +17,17 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Optional;
 
+/**
+ * IP Whitelist Filter — Dynamic Access Perimeter Firewall
+ *
+ * Behaviour:
+ *  1. If the request already carries a Bearer JWT token → SKIP IP check entirely.
+ *     The token will be validated by JwtAuthFilter downstream. This means logged-in
+ *     admins are never locked out due to dynamic IP changes.
+ *  2. If no token is present AND the path is an admin/super-admin path AND
+ *     adminAllowedIps is configured → enforce the IP whitelist.
+ *  3. If adminAllowedIps is null/empty → allow all (Global Transit Mode).
+ */
 @Component
 public class IpWhitelistFilter extends OncePerRequestFilter {
 
@@ -31,32 +42,39 @@ public class IpWhitelistFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        // ===== EMERGENCY BYPASS: IP whitelist fully disabled =====
-        // Restore after clearing adminAllowedIps in Settings > Security
-        filterChain.doFilter(request, response);
-    }
 
-    // ---- restored below when bypass is removed ----
-    @SuppressWarnings("unused")
-    private void doFilterWithIpCheck(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
-            throws ServletException, IOException {
         String path = request.getRequestURI();
 
-        if (path.startsWith("/api/admin/") || path.startsWith("/api/super-admin/")) {
-            Optional<SiteSettings> settingsOpt = siteSettingsRepository.findTopByOrderByIdAsc();
-            if (settingsOpt.isPresent()) {
-                // String allowedIpsRaw = settingsOpt.get().getAdminAllowedIps();
-                String allowedIpsRaw = null; // TEMPORARILY BYPASSED TO RESTORE ADMIN ACCESS
-                if (allowedIpsRaw != null && !allowedIpsRaw.trim().isEmpty()) {
-                    String clientIp = clientIp(request);
-                    boolean isAllowed = checkIp(clientIp, allowedIpsRaw);
+        // Only enforce on admin / super-admin paths
+        if (!path.startsWith("/api/admin/") && !path.startsWith("/api/super-admin/")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
 
-                    if (!isAllowed) {
-                        response.setStatus(403);
-                        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                        objectMapper.writeValue(response.getWriter(), ApiResponse.error("Access Denied: Your IP address is not whitelisted.", null));
-                        return;
-                    }
+        // If the request already has a Bearer JWT token, the user is authenticated.
+        // Skip IP check — they are already a verified admin session.
+        // Dynamic IP changes will not lock out active sessions.
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        // No token — check the IP whitelist (if configured)
+        Optional<SiteSettings> settingsOpt = siteSettingsRepository.findTopByOrderByIdAsc();
+        if (settingsOpt.isPresent()) {
+            String allowedIpsRaw = settingsOpt.get().getAdminAllowedIps();
+            if (allowedIpsRaw != null && !allowedIpsRaw.trim().isEmpty()) {
+                String clientIp = resolveClientIp(request);
+                boolean isAllowed = checkIp(clientIp, allowedIpsRaw);
+                if (!isAllowed) {
+                    response.setStatus(403);
+                    response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                    objectMapper.writeValue(
+                            response.getWriter(),
+                            ApiResponse.error("Access Denied: Your IP address is not whitelisted.", null)
+                    );
+                    return;
                 }
             }
         }
@@ -64,7 +82,7 @@ public class IpWhitelistFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    private String clientIp(HttpServletRequest request) {
+    private String resolveClientIp(HttpServletRequest request) {
         String forwarded = request.getHeader("X-Forwarded-For");
         if (forwarded != null && !forwarded.isBlank()) {
             return forwarded.split(",")[0].trim();

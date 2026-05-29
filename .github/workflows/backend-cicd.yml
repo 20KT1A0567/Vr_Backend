@@ -72,77 +72,105 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Deploy over SSH (shell)
-        env:
-          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+      - name: Write .env file to EC2
+        # Write each env var as a separate echo to avoid nested heredoc YAML indentation bugs
         run: |
           ssh -i ~/.ssh/deploy_key \
               -o StrictHostKeyChecking=no \
-              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'ENDSSH'
-            set -e
-            mkdir -p ~/vr-backend
-            cd ~/vr-backend
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+              "mkdir -p ~/vr-backend && > ~/vr-backend/.env"
 
-            cat > .env << 'EOF'
-            PORT=${{ secrets.PORT }}
-            SERVER_PORT=${{ secrets.SERVER_PORT }}
-            SPRING_PROFILES_DEFAULT=${{ secrets.SPRING_PROFILES_DEFAULT }}
-            MAIL_USERNAME=${{ secrets.MAIL_USERNAME }}
-            MAIL_APP_PASSWORD=${{ secrets.MAIL_APP_PASSWORD }}
-            MAIL_FROM=${{ secrets.MAIL_FROM }}
-            MAIL_FROM_NAME=${{ secrets.MAIL_FROM_NAME }}
-            ADMIN_OTP_TTL_MINUTES=${{ secrets.ADMIN_OTP_TTL_MINUTES }}
-            ADMIN_OTP_RESEND_COOLDOWN_SECONDS=${{ secrets.ADMIN_OTP_RESEND_COOLDOWN_SECONDS }}
-            ADMIN_OTP_MAX_ATTEMPTS=${{ secrets.ADMIN_OTP_MAX_ATTEMPTS }}
-            ADMIN_OTP_DEV_LOG=${{ secrets.ADMIN_OTP_DEV_LOG }}
-            APP_ADMIN_SEED_ENABLED=${{ secrets.APP_ADMIN_SEED_ENABLED }}
-            APP_ADMIN_SEED_OVERWRITE=${{ secrets.APP_ADMIN_SEED_OVERWRITE }}
-            APP_ADMIN_SEED_EMAIL=${{ secrets.APP_ADMIN_SEED_EMAIL }}
-            APP_ADMIN_SEED_PASSWORD=${{ secrets.APP_ADMIN_SEED_PASSWORD }}
-            APP_ADMIN_SEED_NAME=${{ secrets.APP_ADMIN_SEED_NAME }}
-            DB_URL=${{ secrets.DB_URL }}
-            DB_USERNAME=${{ secrets.DB_USERNAME }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            APP_JWT_SECRET=${{ secrets.APP_JWT_SECRET }}
-            APP_JWT_EXPIRY_MS=${{ secrets.APP_JWT_EXPIRY_MS }}
-            APP_JWT_REFRESH_EXPIRY_MS=${{ secrets.APP_JWT_REFRESH_EXPIRY_MS }}
-            FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
-            FIREBASE_CREDENTIALS_PATH=${{ secrets.FIREBASE_CREDENTIALS_PATH }}
-            FIREBASE_CREDENTIALS_JSON=${{ secrets.FIREBASE_CREDENTIALS_JSON }}
-            APP_CORS_ALLOWED_ORIGINS=${{ secrets.APP_CORS_ALLOWED_ORIGINS }}
-            APP_RAZORPAY_ENABLED=${{ secrets.APP_RAZORPAY_ENABLED }}
-            APP_RAZORPAY_KEY_ID=${{ secrets.APP_RAZORPAY_KEY_ID }}
-            APP_RAZORPAY_KEY_SECRET=${{ secrets.APP_RAZORPAY_KEY_SECRET }}
-            APP_RAZORPAY_WEBHOOK_SECRET=${{ secrets.APP_RAZORPAY_WEBHOOK_SECRET }}
-            APP_RAZORPAY_CURRENCY=${{ secrets.APP_RAZORPAY_CURRENCY }}
-            APP_RAZORPAY_API_BASE_URL=${{ secrets.APP_RAZORPAY_API_BASE_URL }}
-            APP_RAZORPAY_MERCHANT_NAME=${{ secrets.APP_RAZORPAY_MERCHANT_NAME }}
-            CLOUDINARY_CLOUD_NAME=${{ secrets.CLOUDINARY_CLOUD_NAME }}
-            CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }}
-            CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }}
-            APP_WHATSAPP_ENABLED=${{ secrets.APP_WHATSAPP_ENABLED }}
-            APP_WHATSAPP_PROVIDER_URL=${{ secrets.APP_WHATSAPP_PROVIDER_URL }}
-            APP_WHATSAPP_BEARER_TOKEN=${{ secrets.APP_WHATSAPP_BEARER_TOKEN }}
-            APP_WEBSITE_BASE_URL=${{ secrets.APP_WEBSITE_BASE_URL }}
-            APP_RATE_LIMIT_WINDOW_SECONDS=${{ secrets.APP_RATE_LIMIT_WINDOW_SECONDS }}
-            APP_RATE_LIMIT_MAX_REQUESTS=${{ secrets.APP_RATE_LIMIT_MAX_REQUESTS }}
-            FLYWAY_ENABLED=${{ secrets.FLYWAY_ENABLED }}
-            WEBAUTHN_RP_ID=myadmin.anushatechnologies.com
-            WEBAUTHN_RP_NAME=VR Technologies Admin
-            EOF
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=no \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} bash -s << 'WRITEENV'
+          set -e
+          ENV_FILE=~/vr-backend/.env
 
-            aws ecr get-login-password --region ap-south-1 \
-              | docker login --username AWS --password-stdin 406223548776.dkr.ecr.ap-south-1.amazonaws.com
+          write_env() { echo "$1=$2" >> "$ENV_FILE"; }
 
-            docker pull 406223548776.dkr.ecr.ap-south-1.amazonaws.com/vr-backend:latest
-            docker rm -f vr-backend || true
-            docker run -d \
-              --name vr-backend \
-              --restart unless-stopped \
-              --env-file .env \
-              -p 8080:8080 \
-              406223548776.dkr.ecr.ap-south-1.amazonaws.com/vr-backend:latest
+          > "$ENV_FILE"
+          write_env PORT "${{ secrets.PORT }}"
+          write_env SERVER_PORT "${{ secrets.SERVER_PORT }}"
+          write_env SPRING_PROFILES_DEFAULT "${{ secrets.SPRING_PROFILES_DEFAULT }}"
+          write_env MAIL_USERNAME "${{ secrets.MAIL_USERNAME }}"
+          write_env MAIL_APP_PASSWORD "${{ secrets.MAIL_APP_PASSWORD }}"
+          write_env MAIL_FROM "${{ secrets.MAIL_FROM }}"
+          write_env MAIL_FROM_NAME "${{ secrets.MAIL_FROM_NAME }}"
+          write_env ADMIN_OTP_TTL_MINUTES "${{ secrets.ADMIN_OTP_TTL_MINUTES }}"
+          write_env ADMIN_OTP_RESEND_COOLDOWN_SECONDS "${{ secrets.ADMIN_OTP_RESEND_COOLDOWN_SECONDS }}"
+          write_env ADMIN_OTP_MAX_ATTEMPTS "${{ secrets.ADMIN_OTP_MAX_ATTEMPTS }}"
+          write_env ADMIN_OTP_DEV_LOG "${{ secrets.ADMIN_OTP_DEV_LOG }}"
+          write_env APP_ADMIN_SEED_ENABLED "${{ secrets.APP_ADMIN_SEED_ENABLED }}"
+          write_env APP_ADMIN_SEED_OVERWRITE "${{ secrets.APP_ADMIN_SEED_OVERWRITE }}"
+          write_env APP_ADMIN_SEED_EMAIL "${{ secrets.APP_ADMIN_SEED_EMAIL }}"
+          write_env APP_ADMIN_SEED_PASSWORD "${{ secrets.APP_ADMIN_SEED_PASSWORD }}"
+          write_env APP_ADMIN_SEED_NAME "${{ secrets.APP_ADMIN_SEED_NAME }}"
+          write_env DB_URL "${{ secrets.DB_URL }}"
+          write_env DB_USERNAME "${{ secrets.DB_USERNAME }}"
+          write_env DB_PASSWORD "${{ secrets.DB_PASSWORD }}"
+          write_env APP_JWT_SECRET "${{ secrets.APP_JWT_SECRET }}"
+          write_env APP_JWT_EXPIRY_MS "${{ secrets.APP_JWT_EXPIRY_MS }}"
+          write_env APP_JWT_REFRESH_EXPIRY_MS "${{ secrets.APP_JWT_REFRESH_EXPIRY_MS }}"
+          write_env FIREBASE_PROJECT_ID "${{ secrets.FIREBASE_PROJECT_ID }}"
+          write_env FIREBASE_CREDENTIALS_PATH "${{ secrets.FIREBASE_CREDENTIALS_PATH }}"
+          write_env FIREBASE_CREDENTIALS_JSON "${{ secrets.FIREBASE_CREDENTIALS_JSON }}"
+          write_env APP_CORS_ALLOWED_ORIGINS "${{ secrets.APP_CORS_ALLOWED_ORIGINS }}"
+          write_env APP_RAZORPAY_ENABLED "${{ secrets.APP_RAZORPAY_ENABLED }}"
+          write_env APP_RAZORPAY_KEY_ID "${{ secrets.APP_RAZORPAY_KEY_ID }}"
+          write_env APP_RAZORPAY_KEY_SECRET "${{ secrets.APP_RAZORPAY_KEY_SECRET }}"
+          write_env APP_RAZORPAY_WEBHOOK_SECRET "${{ secrets.APP_RAZORPAY_WEBHOOK_SECRET }}"
+          write_env APP_RAZORPAY_CURRENCY "${{ secrets.APP_RAZORPAY_CURRENCY }}"
+          write_env APP_RAZORPAY_API_BASE_URL "${{ secrets.APP_RAZORPAY_API_BASE_URL }}"
+          write_env APP_RAZORPAY_MERCHANT_NAME "${{ secrets.APP_RAZORPAY_MERCHANT_NAME }}"
+          write_env CLOUDINARY_CLOUD_NAME "${{ secrets.CLOUDINARY_CLOUD_NAME }}"
+          write_env CLOUDINARY_API_KEY "${{ secrets.CLOUDINARY_API_KEY }}"
+          write_env CLOUDINARY_API_SECRET "${{ secrets.CLOUDINARY_API_SECRET }}"
+          write_env APP_WHATSAPP_ENABLED "${{ secrets.APP_WHATSAPP_ENABLED }}"
+          write_env APP_WHATSAPP_PROVIDER_URL "${{ secrets.APP_WHATSAPP_PROVIDER_URL }}"
+          write_env APP_WHATSAPP_BEARER_TOKEN "${{ secrets.APP_WHATSAPP_BEARER_TOKEN }}"
+          write_env APP_WEBSITE_BASE_URL "${{ secrets.APP_WEBSITE_BASE_URL }}"
+          write_env APP_RATE_LIMIT_WINDOW_SECONDS "${{ secrets.APP_RATE_LIMIT_WINDOW_SECONDS }}"
+          write_env APP_RATE_LIMIT_MAX_REQUESTS "${{ secrets.APP_RATE_LIMIT_MAX_REQUESTS }}"
+          write_env FLYWAY_ENABLED "${{ secrets.FLYWAY_ENABLED }}"
+          write_env WEBAUTHN_RP_ID "myadmin.anushatechnologies.com"
+          write_env WEBAUTHN_RP_NAME "VR Technologies Admin"
 
-            docker image prune -f
-            docker logs --tail 50 vr-backend
-          ENDSSH
+          echo "✅ .env written with $(wc -l < "$ENV_FILE") variables"
+WRITEENV
+
+      - name: Pull image and restart container on EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=no \
+              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} bash -s << 'DEPLOY'
+          set -e
+
+          echo "🔐 Authenticating to ECR..."
+          aws ecr get-login-password --region ap-south-1 \
+            | docker login --username AWS --password-stdin 406223548776.dkr.ecr.ap-south-1.amazonaws.com
+
+          echo "📦 Pulling latest image..."
+          docker pull 406223548776.dkr.ecr.ap-south-1.amazonaws.com/vr-backend:latest
+
+          echo "🛑 Stopping old container..."
+          docker stop vr-backend || true
+          docker rm vr-backend || true
+
+          echo "🚀 Starting new container..."
+          docker run -d \
+            --name vr-backend \
+            --restart unless-stopped \
+            --env-file ~/vr-backend/.env \
+            -p 8080:8080 \
+            406223548776.dkr.ecr.ap-south-1.amazonaws.com/vr-backend:latest
+
+          echo "🧹 Pruning old images..."
+          docker image prune -f
+
+          echo "📋 Container status:"
+          docker ps --filter name=vr-backend
+
+          echo "📜 Last 30 log lines:"
+          sleep 5
+          docker logs --tail 30 vr-backend
+DEPLOY

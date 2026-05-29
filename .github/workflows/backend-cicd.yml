@@ -11,10 +11,6 @@ env:
   AWS_REGION: ap-south-1
   ECR_REGISTRY: 406223548776.dkr.ecr.ap-south-1.amazonaws.com
   ECR_REPOSITORY: vr-backend
-  IMAGE_NAME: vr-backend
-  CONTAINER_NAME: vr-backend
-  HOST_PORT: "8080"
-  CONTAINER_PORT: "8080"
 
 jobs:
   build-and-push:
@@ -27,7 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java 17 (Pre-installed on runner)
+      - name: Set up Java 17
         run: |
           echo "JAVA_HOME=${JAVA_HOME_17_X64}" >> $GITHUB_ENV
           echo "${JAVA_HOME_17_X64}/bin" >> $GITHUB_PATH
@@ -42,16 +38,12 @@ jobs:
           echo "AWS_DEFAULT_REGION=${{ env.AWS_REGION }}" >> $GITHUB_ENV
 
       - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region ${{ env.AWS_REGION }} \
-            | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+        run: aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
 
-      - name: Build Docker image
-        run: docker build -t ${{ env.IMAGE_NAME }} .
-
-      - name: Tag and push Docker image
+      - name: Build, tag and push Docker image
         run: |
-          docker tag ${{ env.IMAGE_NAME }}:latest ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+          docker build -t vr-backend .
+          docker tag vr-backend:latest ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
 
       - name: Export image URI
@@ -120,35 +112,43 @@ jobs:
             echo "WEBAUTHN_RP_ID=myadmin.anushatechnologies.com"
             echo "WEBAUTHN_RP_NAME=VR Technologies Admin"
           } > /tmp/app.env
-          echo "✅ .env created with $(wc -l < /tmp/app.env) variables"
+          echo "Created .env with $(wc -l < /tmp/app.env) variables"
 
-      - name: Copy .env to EC2
+      - name: Create deploy script on runner
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-              "mkdir -p ~/vr-backend"
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-              /tmp/app.env \
-              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:~/vr-backend/.env
-          echo "✅ .env copied to EC2"
+          cat > /tmp/deploy.sh << 'DEPLOY_SCRIPT'
+          #!/bin/bash
+          set -e
+          echo "Logging in to ECR..."
+          aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 406223548776.dkr.ecr.ap-south-1.amazonaws.com
+          echo "Pulling latest image..."
+          docker pull 406223548776.dkr.ecr.ap-south-1.amazonaws.com/vr-backend:latest
+          echo "Stopping old container..."
+          docker stop vr-backend 2>/dev/null || true
+          docker rm vr-backend 2>/dev/null || true
+          echo "Starting new container..."
+          docker run -d --name vr-backend --restart unless-stopped --env-file ~/vr-backend/.env -p 8080:8080 406223548776.dkr.ecr.ap-south-1.amazonaws.com/vr-backend:latest
+          docker image prune -f
+          echo "Container status:"
+          docker ps --filter name=vr-backend
+          echo "Waiting for startup..."
+          sleep 8
+          docker logs --tail 20 vr-backend
+          DEPLOY_SCRIPT
+          chmod +x /tmp/deploy.sh
 
-      - name: Pull image and restart container
+      - name: Copy files to EC2
+        env:
+          REMOTE: ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}
+          SSH_OPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-              ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-              "set -e && \
-               echo '🔐 Logging in to ECR...' && \
-               aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 406223548776.dkr.ecr.ap-south-1.amazonaws.com && \
-               echo '📦 Pulling latest image...' && \
-               docker pull 406223548776.dkr.ecr.ap-south-1.amazonaws.com/vr-backend:latest && \
-               echo '🛑 Removing old container...' && \
-               docker stop vr-backend 2>/dev/null || true && \
-               docker rm vr-backend 2>/dev/null || true && \
-               echo '🚀 Starting new container...' && \
-               docker run -d --name vr-backend --restart unless-stopped --env-file ~/vr-backend/.env -p 8080:8080 406223548776.dkr.ecr.ap-south-1.amazonaws.com/vr-backend:latest && \
-               docker image prune -f && \
-               echo '📋 Container status:' && \
-               docker ps --filter name=vr-backend && \
-               echo '📜 Waiting for startup...' && \
-               sleep 8 && \
-               docker logs --tail 20 vr-backend"
+          ssh $SSH_OPTS $REMOTE "mkdir -p ~/vr-backend"
+          scp $SSH_OPTS /tmp/app.env $REMOTE:~/vr-backend/.env
+          scp $SSH_OPTS /tmp/deploy.sh $REMOTE:~/deploy.sh
+          echo "Files copied to EC2"
+
+      - name: Run deploy script on EC2
+        env:
+          REMOTE: ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}
+          SSH_OPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
+        run: ssh $SSH_OPTS $REMOTE "bash ~/deploy.sh"

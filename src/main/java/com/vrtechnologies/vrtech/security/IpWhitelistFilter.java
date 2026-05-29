@@ -31,6 +31,15 @@ public class IpWhitelistFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
+        // ===== EMERGENCY BYPASS: IP whitelist fully disabled =====
+        // Restore after clearing adminAllowedIps in Settings > Security
+        filterChain.doFilter(request, response);
+    }
+
+    // ---- restored below when bypass is removed ----
+    @SuppressWarnings("unused")
+    private void doFilterWithIpCheck(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
         String path = request.getRequestURI();
 
         if (path.startsWith("/api/admin/") || path.startsWith("/api/super-admin/")) {

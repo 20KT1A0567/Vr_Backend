@@ -363,6 +363,27 @@ public class PincodeDeliveryService {
             return resolution;
         }
 
+        // 7. Global Default Fallback — if delivery is enabled and this pincode is not blacklisted,
+        //    serve it with default settings (covers all pincodes not explicitly configured)
+        if (settings != null && settings.isDeliveryEnabled()) {
+            int defaultDays = settings.getEstimatedDeliveryDays() == null ? 5 : settings.getEstimatedDeliveryDays();
+            BigDecimal threshold = settings.getFreeDeliveryThreshold();
+            boolean freeApplied = threshold != null && threshold.compareTo(BigDecimal.ZERO) > 0 && safeSubtotal.compareTo(threshold) >= 0;
+            BigDecimal charge = freeApplied ? BigDecimal.ZERO : defaultDecimal(settings.getStandardDeliveryCharge());
+            DeliveryResolution resolution = DeliveryResolution.serviceable(
+                    true, true,
+                    charge.max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP),
+                    threshold,
+                    freeApplied,
+                    defaultDays,
+                    defaultDays,
+                    "DEFAULT",
+                    "Delivery available"
+            );
+            resolution.setLocation(location);
+            return resolution;
+        }
+
         DeliveryResolution resolution = DeliveryResolution.unserviceable("PINCODE", "This pincode is not serviceable yet");
         resolution.setLocation(location);
         return resolution;
@@ -485,8 +506,8 @@ public class PincodeDeliveryService {
                     super.prepareConnection(connection, httpMethod);
                 }
             };
-            requestFactory.setConnectTimeout(1000); // 1.0s connect timeout
-            requestFactory.setReadTimeout(1500);    // 1.5s read timeout
+            requestFactory.setConnectTimeout(3000); // 3.0s connect timeout
+            requestFactory.setReadTimeout(4000);    // 4.0s read timeout
             return new RestTemplate(requestFactory);
         } catch (Exception e) {
             return new RestTemplate();

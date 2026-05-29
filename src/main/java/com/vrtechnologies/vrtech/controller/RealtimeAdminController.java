@@ -2,6 +2,7 @@ package com.vrtechnologies.vrtech.controller;
 
 import com.vrtechnologies.vrtech.service.SseEmitterService;
 import com.vrtechnologies.vrtech.service.UserContextService;
+import com.vrtechnologies.vrtech.service.PermissionService;
 import com.vrtechnologies.vrtech.entity.User;
 import com.vrtechnologies.vrtech.entity.AdminPing;
 import com.vrtechnologies.vrtech.repository.AdminPingRepository;
@@ -29,14 +30,21 @@ public class RealtimeAdminController {
     private final SseEmitterService sseEmitterService;
     private final UserContextService userContextService;
     private final AdminPingRepository adminPingRepository;
+    private final PermissionService permissionService;
     
     private static final Map<String, Map<String, Object>> activeLocks = new ConcurrentHashMap<>();
     private static final Map<String, Map<String, Object>> activePresence = new ConcurrentHashMap<>();
 
-    public RealtimeAdminController(SseEmitterService sseEmitterService, UserContextService userContextService, AdminPingRepository adminPingRepository) {
+    public RealtimeAdminController(
+            SseEmitterService sseEmitterService,
+            UserContextService userContextService,
+            AdminPingRepository adminPingRepository,
+            PermissionService permissionService
+    ) {
         this.sseEmitterService = sseEmitterService;
         this.userContextService = userContextService;
         this.adminPingRepository = adminPingRepository;
+        this.permissionService = permissionService;
     }
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -261,10 +269,23 @@ public class RealtimeAdminController {
         User currentUser = userContextService.getCurrentUser();
         String sessionKey = currentUser.getEmail();
 
+        String roleName = null;
+        try {
+            String roleKey = permissionService.resolveRoleKey(currentUser);
+            if (roleKey != null) {
+                roleName = permissionService.requireRole(roleKey).getDisplayName();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to resolve dynamic role display name for presence: {}", currentUser.getEmail(), e);
+        }
+        if (roleName == null || roleName.isBlank()) {
+            roleName = currentUser.getRole().name();
+        }
+
         Map<String, Object> presenceData = Map.of(
             "adminEmail", currentUser.getEmail(),
             "adminName", currentUser.getName(),
-            "adminRole", currentUser.getRole().name(),
+            "adminRole", roleName,
             "page", page,
             "url", url,
             "timestamp", System.currentTimeMillis()
@@ -277,7 +298,7 @@ public class RealtimeAdminController {
 
     @Scheduled(fixedDelay = 15000)
     public void sweepExpiredPresence() {
-        long threshold = System.currentTimeMillis() - 30000; // 30s threshold
+        long threshold = System.currentTimeMillis() - 90000; // 90s threshold
         boolean removedAny = false;
         for (Map.Entry<String, Map<String, Object>> entry : activePresence.entrySet()) {
             Map<String, Object> data = entry.getValue();
@@ -306,7 +327,7 @@ public class RealtimeAdminController {
     }
 
     private List<Map<String, Object>> getUnexpiredPresence() {
-        long threshold = System.currentTimeMillis() - 30000;
+        long threshold = System.currentTimeMillis() - 90000; // 90s threshold
         List<Map<String, Object>> list = new ArrayList<>();
         activePresence.forEach((key, val) -> {
             Long timestamp = (Long) val.get("timestamp");

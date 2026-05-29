@@ -157,4 +157,7 @@ public class SiteSettings extends BaseEntity {
 
     @Column(name = "invoice_format", length = 30, nullable = false)
     private String invoiceFormat = "PDF";
+
+    @Column(name = "maintenance_mode_active", nullable = false)
+    private boolean maintenanceModeActive = false;
 }

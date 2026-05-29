@@ -90,8 +90,17 @@ public class WebAuthnController {
         String sessionKey = body.get("sessionKey");
         String assertion  = body.get("credential");
         User user = webAuthnService.finishAuthentication(sessionKey, assertion);
-        AuthResponse authResponse = authService.loginAsUser(user);
+        AuthResponse authResponse = authService.loginAsUser(user, clientIp(request));
         return ApiResponse.ok("Login successful", authResponse);
+    }
+
+    private String clientIp(HttpServletRequest http) {
+        if (http == null) return null;
+        String forwarded = http.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return http.getRemoteAddr();
     }
 
     // ─── Inner DTO ─────────────────────────────────────────────────────────────────

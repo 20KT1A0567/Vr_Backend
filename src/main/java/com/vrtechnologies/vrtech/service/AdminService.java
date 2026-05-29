@@ -399,6 +399,9 @@ public class AdminService {
         if (request.getInvoiceFormat() != null) {
             settings.setInvoiceFormat(request.getInvoiceFormat().trim().toUpperCase());
         }
+        if (request.getMaintenanceModeActive() != null) {
+            settings.setMaintenanceModeActive(request.getMaintenanceModeActive());
+        }
 
         return siteSettingsRepository.save(settings);
     }
@@ -795,6 +798,7 @@ public class AdminService {
         settings.setNotificationReplyTo(adminUser != null ? adminUser.getEmail() : "support@vrtechnologies.com");
         settings.setWhatsappNumber(primaryStore != null ? primaryStore.getWhatsapp() : null);
         settings.setSecurityNotice("Use strong passwords and rotate production API credentials regularly.");
+        settings.setMaintenanceModeActive(false);
         return siteSettingsRepository.save(settings);
     }
 

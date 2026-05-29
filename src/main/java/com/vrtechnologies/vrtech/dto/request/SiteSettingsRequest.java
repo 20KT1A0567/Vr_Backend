@@ -61,4 +61,5 @@ public class SiteSettingsRequest {
     private String adminAllowedIps;
     private String invoiceLayout;
     private String invoiceFormat;
+    private Boolean maintenanceModeActive;
 }

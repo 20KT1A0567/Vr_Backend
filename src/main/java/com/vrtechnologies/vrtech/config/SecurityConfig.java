@@ -3,6 +3,7 @@ package com.vrtechnologies.vrtech.config;
 import com.vrtechnologies.vrtech.security.IdempotencyFilter;
 import com.vrtechnologies.vrtech.security.IpWhitelistFilter;
 import com.vrtechnologies.vrtech.security.JwtAuthFilter;
+import com.vrtechnologies.vrtech.security.MaintenanceModeFilter;
 import com.vrtechnologies.vrtech.security.RateLimitFilter;
 import com.vrtechnologies.vrtech.security.RestAccessDeniedHandler;
 import com.vrtechnologies.vrtech.security.RestAuthenticationEntryPoint;
@@ -42,6 +43,7 @@ public class SecurityConfig {
     private final RateLimitFilter rateLimitFilter;
     private final IpWhitelistFilter ipWhitelistFilter;
     private final IdempotencyFilter idempotencyFilter;
+    private final MaintenanceModeFilter maintenanceModeFilter;
     private final UserDetailsService userDetailsService;
     private final RestAuthenticationEntryPoint authenticationEntryPoint;
     private final RestAccessDeniedHandler accessDeniedHandler;
@@ -51,6 +53,7 @@ public class SecurityConfig {
             RateLimitFilter rateLimitFilter,
             IpWhitelistFilter ipWhitelistFilter,
             IdempotencyFilter idempotencyFilter,
+            MaintenanceModeFilter maintenanceModeFilter,
             UserDetailsService userDetailsService,
             RestAuthenticationEntryPoint authenticationEntryPoint,
             RestAccessDeniedHandler accessDeniedHandler
@@ -59,6 +62,7 @@ public class SecurityConfig {
         this.rateLimitFilter = rateLimitFilter;
         this.ipWhitelistFilter = ipWhitelistFilter;
         this.idempotencyFilter = idempotencyFilter;
+        this.maintenanceModeFilter = maintenanceModeFilter;
         this.userDetailsService = userDetailsService;
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.accessDeniedHandler = accessDeniedHandler;
@@ -95,7 +99,8 @@ public class SecurityConfig {
                 .addFilterBefore(idempotencyFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(ipWhitelistFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(maintenanceModeFilter, JwtAuthFilter.class);
 
         return http.build();
     }

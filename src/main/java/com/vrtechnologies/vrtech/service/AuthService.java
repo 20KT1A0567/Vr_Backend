@@ -24,10 +24,12 @@ import com.vrtechnologies.vrtech.entity.enums.PermissionAction;
 import com.vrtechnologies.vrtech.entity.enums.Role;
 import com.vrtechnologies.vrtech.exception.BadRequestException;
 import com.vrtechnologies.vrtech.repository.UserRepository;
+import com.vrtechnologies.vrtech.repository.SiteSettingsRepository;
 import com.vrtechnologies.vrtech.security.JwtService;
 import com.vrtechnologies.vrtech.security.TotpUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -37,6 +39,9 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 import java.security.SecureRandom;
 import java.time.DayOfWeek;
@@ -72,6 +77,7 @@ public class AuthService {
     private final PermissionService permissionService;
     private final AdminEmailOtpService adminEmailOtpService;
     private final AdminBackupCodeService backupCodeService;
+    private final SiteSettingsRepository siteSettingsRepository;
 
     @Value("${app.admin.otp.required-roles:SUPER_ADMIN}")
     private String otpRequiredRolesProperty;
@@ -88,7 +94,8 @@ public class AuthService {
             AuthSessionService authSessionService,
             PermissionService permissionService,
             AdminEmailOtpService adminEmailOtpService,
-            AdminBackupCodeService backupCodeService
+            AdminBackupCodeService backupCodeService,
+            SiteSettingsRepository siteSettingsRepository
     ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
@@ -102,6 +109,7 @@ public class AuthService {
         this.permissionService = permissionService;
         this.adminEmailOtpService = adminEmailOtpService;
         this.backupCodeService = backupCodeService;
+        this.siteSettingsRepository = siteSettingsRepository;
     }
 
     public AuthResponse register(RegisterRequest request) {
@@ -149,6 +157,7 @@ public class AuthService {
                 .orElseThrow(() -> new BadRequestException("Invalid credentials"));
 
         ensureUserCanAuthenticate(user);
+        checkAdminIpWhitelist(user, ipAddress);
 
         if (user.getRole() != Role.USER && requiresTwoFactor(user)) {
             if (user.isTotpEnabled()) {
@@ -248,8 +257,90 @@ public class AuthService {
     }
 
     /** Called by WebAuthnController after successful fingerprint/passkey verification. */
-    public AuthResponse loginAsUser(User user) {
+    public AuthResponse loginAsUser(User user, String ipAddress) {
+        checkAdminIpWhitelist(user, ipAddress);
         return finalizeAdminLogin(user);
+    }
+
+    private void checkAdminIpWhitelist(User user, String ipAddress) {
+        if (user.getRole() == Role.USER) {
+            return;
+        }
+        siteSettingsRepository.findTopByOrderByIdAsc().ifPresent(settings -> {
+            String allowedIpsRaw = settings.getAdminAllowedIps();
+            if (allowedIpsRaw != null && !allowedIpsRaw.trim().isEmpty()) {
+                if (!checkIp(ipAddress, allowedIpsRaw)) {
+                    activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
+                            null, null, "Admin login blocked: IP " + ipAddress + " is not whitelisted.");
+                    throw new AccessDeniedException("Access Denied: Your IP address (" + ipAddress + ") is not whitelisted.");
+                }
+            }
+        });
+    }
+
+    private boolean checkIp(String clientIp, String allowedIpsRaw) {
+        if (clientIp == null) {
+            return false;
+        }
+        for (String rule : allowedIpsRaw.split(",")) {
+            String trimmedRule = rule.trim();
+            if (trimmedRule.isEmpty()) {
+                continue;
+            }
+            if (trimmedRule.equals(clientIp)) {
+                return true;
+            }
+            if (trimmedRule.contains("/")) {
+                try {
+                    if (ipInCidr(clientIp, trimmedRule)) {
+                        return true;
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean ipInCidr(String ip, String cidr) throws UnknownHostException {
+        String[] parts = cidr.split("/");
+        if (parts.length != 2) {
+            return false;
+        }
+        String subnetStr = parts[0];
+        int prefixLength;
+        try {
+            prefixLength = Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+
+        InetAddress clientAddr = InetAddress.getByName(ip);
+        InetAddress subnetAddr = InetAddress.getByName(subnetStr);
+
+        byte[] clientBytes = clientAddr.getAddress();
+        byte[] subnetBytes = subnetAddr.getAddress();
+
+        if (clientBytes.length != subnetBytes.length) {
+            return false;
+        }
+
+        int bytesToCheck = prefixLength / 8;
+        int bitsToCheck = prefixLength % 8;
+
+        for (int i = 0; i < bytesToCheck; i++) {
+            if (clientBytes[i] != subnetBytes[i]) {
+                return false;
+            }
+        }
+
+        if (bitsToCheck > 0) {
+            int mask = 0xff00 >>> bitsToCheck;
+            mask = mask & 0xff;
+            return (clientBytes[bytesToCheck] & mask) == (subnetBytes[bytesToCheck] & mask);
+        }
+
+        return true;
     }
 
     private boolean requiresTwoFactor(User user) {

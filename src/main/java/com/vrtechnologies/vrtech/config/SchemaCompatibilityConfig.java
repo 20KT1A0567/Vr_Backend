@@ -176,7 +176,7 @@ public class SchemaCompatibilityConfig {
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS push_subscriptions (id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NULL, endpoint VARCHAR(1024) NOT NULL, p256dh VARCHAR(256) NOT NULL, auth VARCHAR(256) NOT NULL, user_agent VARCHAR(512) NULL, created_at DATETIME NOT NULL, PRIMARY KEY (id))");
             migrate(jdbcTemplate, "ALTER TABLE products ADD COLUMN lead_time_days INT NULL DEFAULT 7");
 
-            // Seed local pincode cache for demonstration of Prakasam location
+             // Seed local pincode cache for demonstration of Prakasam and Bengaluru locations
             try {
                 jdbcTemplate.update("INSERT INTO pincode_api_cache (pincode, state_name, district_name, cityName, created_at) " +
                         "VALUES ('523304', 'Andhra Pradesh', 'Prakasam', 'Ongole', NOW()) " +
@@ -184,6 +184,9 @@ public class SchemaCompatibilityConfig {
                 jdbcTemplate.update("INSERT INTO pincode_api_cache (pincode, state_name, district_name, cityName, created_at) " +
                         "VALUES ('533304', 'Andhra Pradesh', 'Prakasam', 'Kakinada', NOW()) " +
                         "ON DUPLICATE KEY UPDATE district_name = 'Prakasam', cityName = 'Kakinada'");
+                jdbcTemplate.update("INSERT INTO pincode_api_cache (pincode, state_name, district_name, cityName, created_at) " +
+                        "VALUES ('560068', 'Karnataka', 'Bengaluru', 'Bengaluru', NOW()) " +
+                        "ON DUPLICATE KEY UPDATE district_name = 'Bengaluru', cityName = 'Bengaluru'");
             } catch (Exception e) {
                 try {
                     jdbcTemplate.update("INSERT INTO pincode_api_cache (pincode, state_name, district_name, city_name, created_at) " +
@@ -192,6 +195,9 @@ public class SchemaCompatibilityConfig {
                     jdbcTemplate.update("INSERT INTO pincode_api_cache (pincode, state_name, district_name, city_name, created_at) " +
                             "VALUES ('533304', 'Andhra Pradesh', 'Prakasam', 'Kakinada', NOW()) " +
                             "ON DUPLICATE KEY UPDATE district_name = 'Prakasam', city_name = 'Kakinada'");
+                    jdbcTemplate.update("INSERT INTO pincode_api_cache (pincode, state_name, district_name, city_name, created_at) " +
+                            "VALUES ('560068', 'Karnataka', 'Bengaluru', 'Bengaluru', NOW()) " +
+                            "ON DUPLICATE KEY UPDATE district_name = 'Bengaluru', city_name = 'Bengaluru'");
                 } catch (Exception ex) {
                     log.warn("Could not pre-populate pincode_api_cache: {}", ex.getMessage());
                 }

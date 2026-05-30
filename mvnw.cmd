@@ -35,6 +35,11 @@
 
 @REM Begin all REM lines with '@' in case MAVEN_BATCH_ECHO is 'on'
 @echo off
+@if not exist "%JAVA_HOME%\bin\java.exe" (
+    @if exist "C:\Program Files\Java\jdk-21.0.11" (
+        @set "JAVA_HOME=C:\Program Files\Java\jdk-21.0.11"
+    )
+)
 @REM set title of command window
 title %0
 @REM enable echoing by setting MAVEN_BATCH_ECHO to 'on'

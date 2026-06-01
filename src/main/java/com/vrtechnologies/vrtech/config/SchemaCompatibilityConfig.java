@@ -176,6 +176,16 @@ public class SchemaCompatibilityConfig {
             migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS push_subscriptions (id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NULL, endpoint VARCHAR(1024) NOT NULL, p256dh VARCHAR(256) NOT NULL, auth VARCHAR(256) NOT NULL, user_agent VARCHAR(512) NULL, created_at DATETIME NOT NULL, PRIMARY KEY (id))");
             migrate(jdbcTemplate, "ALTER TABLE products ADD COLUMN lead_time_days INT NULL DEFAULT 7");
 
+            // Variant and Attribute Schema updates
+            migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS attributes (id BIGINT NOT NULL AUTO_INCREMENT, name VARCHAR(100) NOT NULL UNIQUE, PRIMARY KEY (id))");
+            migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS attribute_values (id BIGINT NOT NULL AUTO_INCREMENT, attribute_id BIGINT NOT NULL, value VARCHAR(100) NOT NULL, PRIMARY KEY (id), UNIQUE KEY uk_attribute_value (attribute_id, value), FOREIGN KEY (attribute_id) REFERENCES attributes(id) ON DELETE CASCADE)");
+            migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS product_variants (id BIGINT NOT NULL AUTO_INCREMENT, product_id BIGINT NOT NULL, sku VARCHAR(100) NOT NULL UNIQUE, price DECIMAL(10,2) NOT NULL, original_price DECIMAL(10,2) NULL, stock_quantity INT NOT NULL DEFAULT 0, low_stock_threshold INT NOT NULL DEFAULT 5, available BIT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, PRIMARY KEY (id), FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE)");
+            migrate(jdbcTemplate, "CREATE TABLE IF NOT EXISTS product_variant_attribute_values (variant_id BIGINT NOT NULL, attribute_value_id BIGINT NOT NULL, PRIMARY KEY (variant_id, attribute_value_id), FOREIGN KEY (variant_id) REFERENCES product_variants(id) ON DELETE CASCADE, FOREIGN KEY (attribute_value_id) REFERENCES attribute_values(id) ON DELETE CASCADE)");
+            migrate(jdbcTemplate, "ALTER TABLE cart_items ADD COLUMN product_variant_id BIGINT NULL");
+            migrate(jdbcTemplate, "ALTER TABLE cart_items ADD CONSTRAINT fk_cart_items_variant FOREIGN KEY (product_variant_id) REFERENCES product_variants(id) ON DELETE SET NULL");
+            migrate(jdbcTemplate, "ALTER TABLE order_items ADD COLUMN product_variant_id BIGINT NULL");
+            migrate(jdbcTemplate, "ALTER TABLE order_items ADD CONSTRAINT fk_order_items_variant FOREIGN KEY (product_variant_id) REFERENCES product_variants(id) ON DELETE SET NULL");
+
              // Seed local pincode cache for demonstration of Prakasam and Bengaluru locations
             try {
                 jdbcTemplate.update("INSERT INTO pincode_api_cache (pincode, state_name, district_name, cityName, created_at) " +
@@ -201,6 +211,21 @@ public class SchemaCompatibilityConfig {
                 } catch (Exception ex) {
                     log.warn("Could not pre-populate pincode_api_cache: {}", ex.getMessage());
                 }
+            }
+
+            // Ensure product 42 has a second image for demonstration
+            try {
+                Integer imageCount = jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) FROM product_images WHERE product_id = 42", Integer.class);
+                if (imageCount != null && imageCount == 1) {
+                    jdbcTemplate.update(
+                            "INSERT INTO product_images (image_url, primary_image, public_id, sort_order, product_id) " +
+                            "VALUES ('https://res.cloudinary.com/djiicnqlh/image/upload/v1777534349/products/x0mw9pi2nyhshzlorvez.jpg', 0, 'products/demo_latitude_2', 2, 42)"
+                    );
+                    log.info("Successfully added a second image for product 42 demo");
+                }
+            } catch (Exception ex) {
+                log.warn("Could not seed second image for product 42: {}", ex.getMessage());
             }
         };
     }

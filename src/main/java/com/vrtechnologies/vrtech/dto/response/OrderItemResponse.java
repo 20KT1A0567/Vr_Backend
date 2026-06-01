@@ -13,4 +13,5 @@ public class OrderItemResponse {
     private Integer quantity;
     private BigDecimal priceAtTime;
     private ProductResponse product;
+    private ProductVariantResponse variant;
 }

@@ -10,4 +10,5 @@ public class CartItemResponse {
     private Long id;
     private Integer quantity;
     private ProductResponse product;
+    private ProductVariantResponse variant;
 }

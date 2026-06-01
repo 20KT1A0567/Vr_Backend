@@ -43,6 +43,10 @@ import com.vrtechnologies.vrtech.repository.PaymentWebhookEventRepository;
 import com.vrtechnologies.vrtech.repository.ProductRepository;
 import com.vrtechnologies.vrtech.repository.ProductStoreStockRepository;
 import com.vrtechnologies.vrtech.repository.RefundTransactionRepository;
+import com.vrtechnologies.vrtech.repository.ProductVariantRepository;
+import com.vrtechnologies.vrtech.entity.ProductVariant;
+import com.vrtechnologies.vrtech.dto.response.ProductVariantResponse;
+import com.vrtechnologies.vrtech.entity.AttributeValue;
 import com.vrtechnologies.vrtech.repository.SiteSettingsRepository;
 import com.vrtechnologies.vrtech.repository.StoreRepository;
 import com.vrtechnologies.vrtech.repository.UserAddressRepository;
@@ -89,6 +93,7 @@ public class OrderService {
     private final SiteSettingsRepository siteSettingsRepository;
     private final PincodeDeliveryService pincodeDeliveryService;
     private final ObjectMapper objectMapper;
+    private final ProductVariantRepository productVariantRepository;
 
     public OrderService(
             CustomerOrderRepository customerOrderRepository,
@@ -110,7 +115,8 @@ public class OrderService {
             UserAddressRepository userAddressRepository,
             SiteSettingsRepository siteSettingsRepository,
             PincodeDeliveryService pincodeDeliveryService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ProductVariantRepository productVariantRepository
     ) {
         this.customerOrderRepository = customerOrderRepository;
         this.cartItemRepository = cartItemRepository;
@@ -132,6 +138,7 @@ public class OrderService {
         this.siteSettingsRepository = siteSettingsRepository;
         this.pincodeDeliveryService = pincodeDeliveryService;
         this.objectMapper = objectMapper;
+        this.productVariantRepository = productVariantRepository;
     }
 
     @Transactional
@@ -193,15 +200,25 @@ public class OrderService {
         BigDecimal total = BigDecimal.ZERO;
         for (CartItem cartItem : cartItems) {
             validateCartItemStore(cartItem, store);
-            reserveInventory(cartItem.getProduct(), store, cartItem.getQuantity());
+            ProductVariant variant = cartItem.getProductVariant();
+            if (variant != null) {
+                reserveVariantInventory(variant, cartItem.getQuantity());
+            } else {
+                reserveInventory(cartItem.getProduct(), store, cartItem.getQuantity());
+            }
+
+            BigDecimal itemPrice = variant != null && variant.getPrice() != null
+                    ? variant.getPrice()
+                    : cartItem.getProduct().getPrice();
 
             OrderItem item = new OrderItem();
             item.setOrder(order);
             item.setProduct(cartItem.getProduct());
+            item.setProductVariant(variant);
             item.setQuantity(cartItem.getQuantity());
-            item.setPriceAtTime(cartItem.getProduct().getPrice());
+            item.setPriceAtTime(itemPrice);
             order.getItems().add(item);
-            total = total.add(cartItem.getProduct().getPrice().multiply(BigDecimal.valueOf(cartItem.getQuantity())));
+            total = total.add(itemPrice.multiply(BigDecimal.valueOf(cartItem.getQuantity())));
         }
 
         BigDecimal discount = BigDecimal.ZERO;
@@ -308,15 +325,34 @@ public class OrderService {
             Product product = productRepository.findById(requestedItem.getProductId())
                     .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
             validateProductStore(product, store);
-            reserveInventory(product, store, requestedItem.getQuantity());
+
+            ProductVariant variant = null;
+            if (requestedItem.getProductVariantId() != null) {
+                variant = productVariantRepository.findById(requestedItem.getProductVariantId())
+                        .orElseThrow(() -> new ResourceNotFoundException("Product variant not found"));
+                if (!variant.getProduct().getId().equals(product.getId())) {
+                    throw new BadRequestException("Variant does not belong to this product");
+                }
+            }
+
+            if (variant != null) {
+                reserveVariantInventory(variant, requestedItem.getQuantity());
+            } else {
+                reserveInventory(product, store, requestedItem.getQuantity());
+            }
+
+            BigDecimal itemPrice = variant != null && variant.getPrice() != null
+                    ? variant.getPrice()
+                    : product.getPrice();
 
             OrderItem item = new OrderItem();
             item.setOrder(order);
             item.setProduct(product);
+            item.setProductVariant(variant);
             item.setQuantity(requestedItem.getQuantity());
-            item.setPriceAtTime(product.getPrice());
+            item.setPriceAtTime(itemPrice);
             order.getItems().add(item);
-            total = total.add(product.getPrice().multiply(BigDecimal.valueOf(requestedItem.getQuantity())));
+            total = total.add(itemPrice.multiply(BigDecimal.valueOf(requestedItem.getQuantity())));
         }
 
         BigDecimal discount = BigDecimal.ZERO;
@@ -658,7 +694,11 @@ public class OrderService {
         } else {
             if (previousStatus == OrderStatus.CANCELLED && status != OrderStatus.CANCELLED) {
                 for (OrderItem item : order.getItems()) {
-                    reserveInventory(item.getProduct(), order.getStore(), item.getQuantity());
+                    if (item.getProductVariant() != null) {
+                        reserveVariantInventory(item.getProductVariant(), item.getQuantity());
+                    } else {
+                        reserveInventory(item.getProduct(), order.getStore(), item.getQuantity());
+                    }
                 }
                 order.setCancelledAt(null);
                 order.setCancellationReason(null);
@@ -1180,6 +1220,7 @@ public class OrderService {
                         .quantity(item.getQuantity())
                         .priceAtTime(item.getPriceAtTime())
                         .product(productService.toProductResponse(item.getProduct()))
+                        .variant(toVariantResponse(item.getProductVariant()))
                         .build()).toList())
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
@@ -1412,7 +1453,11 @@ public class OrderService {
     private void cancelOrder(CustomerOrder order, String reason, User actor, String source) {
         if (order.getStatus() != OrderStatus.CANCELLED) {
             for (OrderItem item : order.getItems()) {
-                releaseInventory(item.getProduct(), order.getStore(), item.getQuantity());
+                if (item.getProductVariant() != null) {
+                    releaseVariantInventory(item.getProductVariant(), item.getQuantity());
+                } else {
+                    releaseInventory(item.getProduct(), order.getStore(), item.getQuantity());
+                }
             }
         }
         order.setStatus(OrderStatus.CANCELLED);
@@ -1429,6 +1474,46 @@ public class OrderService {
                 source,
                 metadata("reason", reason)
         );
+    }
+
+    private void reserveVariantInventory(ProductVariant variant, int quantity) {
+        if (Boolean.FALSE.equals(variant.getAvailable()) || variant.getStockQuantity() == null || variant.getStockQuantity() < quantity) {
+            throw new BadRequestException("Variant does not have enough stock");
+        }
+        variant.setStockQuantity(variant.getStockQuantity() - quantity);
+        if (variant.getStockQuantity() <= 0) {
+            variant.setAvailable(false);
+        }
+        productVariantRepository.save(variant);
+    }
+
+    private void releaseVariantInventory(ProductVariant variant, int quantity) {
+        int current = variant.getStockQuantity() == null ? 0 : variant.getStockQuantity();
+        variant.setStockQuantity(current + quantity);
+        if (variant.getStockQuantity() > 0) {
+            variant.setAvailable(true);
+        }
+        productVariantRepository.save(variant);
+    }
+
+    private ProductVariantResponse toVariantResponse(ProductVariant variant) {
+        if (variant == null) return null;
+        java.util.Map<String, String> attrs = new LinkedHashMap<>();
+        if (variant.getAttributeValues() != null) {
+            for (AttributeValue av : variant.getAttributeValues()) {
+                attrs.put(av.getAttribute().getName(), av.getValue());
+            }
+        }
+        return ProductVariantResponse.builder()
+                .id(variant.getId())
+                .sku(variant.getSku())
+                .price(variant.getPrice())
+                .originalPrice(variant.getOriginalPrice())
+                .stockQuantity(variant.getStockQuantity())
+                .lowStockThreshold(variant.getLowStockThreshold())
+                .available(variant.getAvailable() == null || variant.getAvailable())
+                .attributes(attrs)
+                .build();
     }
 
     private void createManualPaymentTransaction(CustomerOrder order, User admin, PaymentTransactionStatus status, String description) {

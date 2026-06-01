@@ -43,6 +43,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import com.vrtechnologies.vrtech.entity.ProductPriceHistory;
 import com.vrtechnologies.vrtech.repository.ProductPriceHistoryRepository;
+import com.vrtechnologies.vrtech.dto.response.ProductVariantResponse;
+import com.vrtechnologies.vrtech.entity.ProductVariant;
+import com.vrtechnologies.vrtech.entity.AttributeValue;
 import com.vrtechnologies.vrtech.dto.event.PriceUpdatedEvent;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -747,6 +750,26 @@ public class ProductService {
                 .createdAt(product.getCreatedAt())
                 .updatedAt(product.getUpdatedAt())
                 .lowestPrice90Days(calculateLowestPrice90DaysOptimized(product.getPrice(), productHistory))
+                .variants(product.getVariants() == null ? List.of() : product.getVariants().stream().map(this::toVariantResponse).toList())
+                .build();
+    }
+
+    private ProductVariantResponse toVariantResponse(ProductVariant variant) {
+        Map<String, String> attrs = new LinkedHashMap<>();
+        if (variant.getAttributeValues() != null) {
+            for (AttributeValue av : variant.getAttributeValues()) {
+                attrs.put(av.getAttribute().getName(), av.getValue());
+            }
+        }
+        return ProductVariantResponse.builder()
+                .id(variant.getId())
+                .sku(variant.getSku())
+                .price(variant.getPrice())
+                .originalPrice(variant.getOriginalPrice())
+                .stockQuantity(variant.getStockQuantity())
+                .lowStockThreshold(variant.getLowStockThreshold())
+                .available(variant.getAvailable() == null || variant.getAvailable())
+                .attributes(attrs)
                 .build();
     }
 

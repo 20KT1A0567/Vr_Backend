@@ -181,6 +181,9 @@ public class Product extends BaseEntity {
     @OrderBy("sortOrder ASC, id ASC")
     private Set<ProductImage> images = new LinkedHashSet<>();
 
+    @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true)
+    private Set<ProductVariant> variants = new LinkedHashSet<>();
+
     public ProductStatus getEffectiveProductStatus() {
         return productStatus == null ? ProductStatus.ACTIVE : productStatus;
     }

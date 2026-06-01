@@ -12,6 +12,8 @@ public class OrderItemRequest {
     @NotNull
     private Long productId;
 
+    private Long productVariantId;
+
     @Min(1)
     private int quantity = 1;
 }

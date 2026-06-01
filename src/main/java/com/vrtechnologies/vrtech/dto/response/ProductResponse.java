@@ -67,6 +67,7 @@ public class ProductResponse {
     private List<StoreSummaryResponse> stores;
     private List<StoreAvailabilityResponse> storeAvailability;
     private List<ProductImageResponse> images;
+    private List<ProductVariantResponse> variants;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private boolean lowestPrice90Days;

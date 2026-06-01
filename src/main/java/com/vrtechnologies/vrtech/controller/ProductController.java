@@ -6,10 +6,12 @@ import com.vrtechnologies.vrtech.dto.request.RecentProductViewRequest;
 import com.vrtechnologies.vrtech.dto.response.ApiResponse;
 import com.vrtechnologies.vrtech.dto.response.BackInStockRequestResponse;
 import com.vrtechnologies.vrtech.dto.response.ProductResponse;
+import com.vrtechnologies.vrtech.dto.response.ProductReviewResponse;
 import com.vrtechnologies.vrtech.entity.PriceDropAlert;
 import com.vrtechnologies.vrtech.service.BackInStockService;
 import com.vrtechnologies.vrtech.entity.enums.ProductCondition;
 import com.vrtechnologies.vrtech.service.ProductEngagementService;
+import com.vrtechnologies.vrtech.service.ProductReviewService;
 import com.vrtechnologies.vrtech.service.ProductService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,11 +34,13 @@ public class ProductController {
     private final ProductService productService;
     private final BackInStockService backInStockService;
     private final ProductEngagementService productEngagementService;
+    private final ProductReviewService productReviewService;
 
-    public ProductController(ProductService productService, BackInStockService backInStockService, ProductEngagementService productEngagementService) {
+    public ProductController(ProductService productService, BackInStockService backInStockService, ProductEngagementService productEngagementService, ProductReviewService productReviewService) {
         this.productService = productService;
         this.backInStockService = backInStockService;
         this.productEngagementService = productEngagementService;
+        this.productReviewService = productReviewService;
     }
 
     @GetMapping
@@ -99,6 +103,11 @@ public class ProductController {
     @GetMapping("/{id}")
     public ApiResponse<ProductResponse> getProduct(@PathVariable Long id) {
         return ApiResponse.ok("Product fetched", productService.getProduct(id, false));
+    }
+
+    @GetMapping("/{id}/reviews")
+    public ApiResponse<List<ProductReviewResponse>> getProductReviews(@PathVariable Long id) {
+        return ApiResponse.ok("Product reviews fetched", productReviewService.getApprovedProductReviews(id));
     }
 
     @PostMapping("/back-in-stock")

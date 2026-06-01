@@ -25,4 +25,5 @@ public class ProductReviewResponse {
     private String adminNote;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private boolean verifiedPurchase;
 }

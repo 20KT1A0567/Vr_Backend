@@ -79,6 +79,7 @@ public class ProductReviewService {
         review.setStatus(request.getStatus() == null ? ReviewStatus.PENDING : request.getStatus());
         review.setFeatured(request.isFeatured());
         review.setAdminNote(normalize(request.getAdminNote()));
+        review.setVerifiedPurchase(request.getVerifiedPurchase() != null ? request.getVerifiedPurchase() : false);
         return toResponse(productReviewRepository.save(review));
     }
 
@@ -106,6 +107,7 @@ public class ProductReviewService {
         review.setComment(request.getComment().trim());
         review.setStatus(ReviewStatus.PENDING);
         review.setFeatured(false);
+        review.setVerifiedPurchase(true);
         return toResponse(productReviewRepository.save(review));
     }
 
@@ -130,6 +132,13 @@ public class ProductReviewService {
     public void deleteReview(User admin, Long id) {
         ProductReview review = requireReview(admin, id);
         productReviewRepository.delete(review);
+    }
+
+    public List<ProductReviewResponse> getApprovedProductReviews(Long productId) {
+        return productReviewRepository.findByProductIdAndStatusOrderByCreatedAtDesc(productId, ReviewStatus.APPROVED)
+                .stream()
+                .map(this::toResponse)
+                .toList();
     }
 
     private ProductReview requireReview(User admin, Long id) {
@@ -181,6 +190,7 @@ public class ProductReviewService {
                 .status(review.getStatus())
                 .featured(review.isFeatured())
                 .adminNote(review.getAdminNote())
+                .verifiedPurchase(review.isVerifiedPurchase())
                 .createdAt(review.getCreatedAt())
                 .updatedAt(review.getUpdatedAt())
                 .build();

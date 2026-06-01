@@ -40,4 +40,6 @@ public class ProductReviewRequest {
     private boolean featured;
 
     private String adminNote;
+
+    private Boolean verifiedPurchase;
 }

@@ -57,4 +57,7 @@ public class ProductReview extends BaseEntity {
 
     @Column(columnDefinition = "TEXT")
     private String adminNote;
+
+    @Column(nullable = false)
+    private boolean verifiedPurchase = false;
 }

@@ -13,6 +13,8 @@ public class ProductVariantResponse {
     private BigDecimal price;
     private BigDecimal originalPrice;
     private Integer stockQuantity;
+    private Integer availableStockQuantity;
+    private Integer activeReservationsCount;
     private Integer lowStockThreshold;
     private boolean available;
     private Map<String, String> attributes;

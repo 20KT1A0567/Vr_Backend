@@ -46,6 +46,8 @@ public class ProductResponse {
     private BigDecimal originalPrice;
     private Integer discountPercent;
     private Integer stockQuantity;
+    private Integer availableStockQuantity;
+    private Integer activeReservationsCount;
     private boolean available;
     private boolean featured;
     private boolean bestSeller;

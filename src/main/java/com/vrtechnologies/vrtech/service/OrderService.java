@@ -50,6 +50,11 @@ import com.vrtechnologies.vrtech.entity.AttributeValue;
 import com.vrtechnologies.vrtech.repository.SiteSettingsRepository;
 import com.vrtechnologies.vrtech.repository.StoreRepository;
 import com.vrtechnologies.vrtech.repository.UserAddressRepository;
+import com.vrtechnologies.vrtech.entity.StockReservation;
+import com.vrtechnologies.vrtech.entity.enums.ReservationStatus;
+import com.vrtechnologies.vrtech.repository.StockReservationRepository;
+import com.vrtechnologies.vrtech.service.SseEmitterService;
+import com.vrtechnologies.vrtech.dto.event.SystemEvent;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -94,6 +99,8 @@ public class OrderService {
     private final PincodeDeliveryService pincodeDeliveryService;
     private final ObjectMapper objectMapper;
     private final ProductVariantRepository productVariantRepository;
+    private final StockReservationRepository stockReservationRepository;
+    private final SseEmitterService sseEmitterService;
 
     public OrderService(
             CustomerOrderRepository customerOrderRepository,
@@ -116,7 +123,9 @@ public class OrderService {
             SiteSettingsRepository siteSettingsRepository,
             PincodeDeliveryService pincodeDeliveryService,
             ObjectMapper objectMapper,
-            ProductVariantRepository productVariantRepository
+            ProductVariantRepository productVariantRepository,
+            StockReservationRepository stockReservationRepository,
+            SseEmitterService sseEmitterService
     ) {
         this.customerOrderRepository = customerOrderRepository;
         this.cartItemRepository = cartItemRepository;
@@ -139,6 +148,8 @@ public class OrderService {
         this.pincodeDeliveryService = pincodeDeliveryService;
         this.objectMapper = objectMapper;
         this.productVariantRepository = productVariantRepository;
+        this.stockReservationRepository = stockReservationRepository;
+        this.sseEmitterService = sseEmitterService;
     }
 
     @Transactional
@@ -198,26 +209,25 @@ public class OrderService {
         updateUserCheckoutPreferences(user, request);
 
         BigDecimal total = BigDecimal.ZERO;
+        boolean isOnlinePayment = isOnlinePaymentMethod(request.getPaymentMethod());
+        CustomerOrder savedOrderForReservation = customerOrderRepository.save(order);
+
         for (CartItem cartItem : cartItems) {
             validateCartItemStore(cartItem, store);
             ProductVariant variant = cartItem.getProductVariant();
-            if (variant != null) {
-                reserveVariantInventory(variant, cartItem.getQuantity());
-            } else {
-                reserveInventory(cartItem.getProduct(), store, cartItem.getQuantity());
-            }
+            createSoftReservation(savedOrderForReservation, cartItem.getProduct(), variant, store, cartItem.getQuantity(), isOnlinePayment);
 
             BigDecimal itemPrice = variant != null && variant.getPrice() != null
                     ? variant.getPrice()
                     : cartItem.getProduct().getPrice();
 
             OrderItem item = new OrderItem();
-            item.setOrder(order);
+            item.setOrder(savedOrderForReservation);
             item.setProduct(cartItem.getProduct());
             item.setProductVariant(variant);
             item.setQuantity(cartItem.getQuantity());
             item.setPriceAtTime(itemPrice);
-            order.getItems().add(item);
+            savedOrderForReservation.getItems().add(item);
             total = total.add(itemPrice.multiply(BigDecimal.valueOf(cartItem.getQuantity())));
         }
 
@@ -226,27 +236,26 @@ public class OrderService {
         if (couponCode != null) {
             CouponValidationResponse validation = couponService.apply(couponCode, total);
             discount = validation.getDiscountAmount();
-            order.setCouponCode(validation.getCode());
+            savedOrderForReservation.setCouponCode(validation.getCode());
         }
-        order.setSubtotalAmount(total);
-        order.setDiscountAmount(discount);
+        savedOrderForReservation.setSubtotalAmount(total);
+        savedOrderForReservation.setDiscountAmount(discount);
         BigDecimal afterDiscount = total.subtract(discount).max(BigDecimal.ZERO);
         PincodeDeliveryService.DeliveryResolution deliveryResolution = resolveDelivery(settings, request, store, afterDiscount);
         BigDecimal deliveryCharge = deliveryResolution.getDeliveryCharge();
         BigDecimal taxAmount = calculateTax(settings, afterDiscount);
-        order.setDeliveryCharge(deliveryCharge);
-        order.setPromisedMinDeliveryDays(deliveryResolution.getMinDeliveryDays());
-        order.setPromisedMaxDeliveryDays(deliveryResolution.getMaxDeliveryDays());
-        order.setDeliveryRuleId(deliveryResolution.getRuleId());
-        order.setTaxAmount(taxAmount);
-        order.setTotalAmount(afterDiscount.add(taxAmount).add(deliveryCharge).setScale(2, RoundingMode.HALF_UP));
-        CustomerOrder saved = customerOrderRepository.save(order);
+        savedOrderForReservation.setDeliveryCharge(deliveryCharge);
+        savedOrderForReservation.setPromisedMinDeliveryDays(deliveryResolution.getMinDeliveryDays());
+        savedOrderForReservation.setPromisedMaxDeliveryDays(deliveryResolution.getMaxDeliveryDays());
+        savedOrderForReservation.setDeliveryRuleId(deliveryResolution.getRuleId());
+        savedOrderForReservation.setTaxAmount(taxAmount);
+        savedOrderForReservation.setTotalAmount(afterDiscount.add(taxAmount).add(deliveryCharge).setScale(2, RoundingMode.HALF_UP));
+        CustomerOrder saved = customerOrderRepository.save(savedOrderForReservation);
         ensureOrderIdentifiers(saved);
         cartItemRepository.deleteByUserId(user.getId());
         if (!isOnlinePaymentMethod(saved.getPaymentMethod())) {
             notificationService.logOrderEvent("ORDER_PLACED", saved, "Order placed", "Your order " + saved.getOrderNumber() + " has been placed.");
         }
-
         orderTimelineService.record(
                 saved,
                 OrderTimelineEventType.PLACED,
@@ -319,8 +328,10 @@ public class OrderService {
         order.setDeliveryState(trimToNull(request.getDeliveryState()));
         order.setDeliveryPostalCode(trimToNull(request.getDeliveryPostalCode()));
         order.setNotes(trimToNull(request.getNotes()));
-
         BigDecimal total = BigDecimal.ZERO;
+        boolean isOnlinePayment = isOnlinePaymentMethod(request.getPaymentMethod());
+        CustomerOrder savedOrderForReservation = customerOrderRepository.save(order);
+
         for (var requestedItem : request.getItems()) {
             Product product = productRepository.findById(requestedItem.getProductId())
                     .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
@@ -335,23 +346,19 @@ public class OrderService {
                 }
             }
 
-            if (variant != null) {
-                reserveVariantInventory(variant, requestedItem.getQuantity());
-            } else {
-                reserveInventory(product, store, requestedItem.getQuantity());
-            }
+            createSoftReservation(savedOrderForReservation, product, variant, store, requestedItem.getQuantity(), isOnlinePayment);
 
             BigDecimal itemPrice = variant != null && variant.getPrice() != null
                     ? variant.getPrice()
                     : product.getPrice();
 
             OrderItem item = new OrderItem();
-            item.setOrder(order);
+            item.setOrder(savedOrderForReservation);
             item.setProduct(product);
             item.setProductVariant(variant);
             item.setQuantity(requestedItem.getQuantity());
             item.setPriceAtTime(itemPrice);
-            order.getItems().add(item);
+            savedOrderForReservation.getItems().add(item);
             total = total.add(itemPrice.multiply(BigDecimal.valueOf(requestedItem.getQuantity())));
         }
 
@@ -360,20 +367,20 @@ public class OrderService {
         if (couponCode != null) {
             CouponValidationResponse validation = couponService.apply(couponCode, total);
             discount = validation.getDiscountAmount();
-            order.setCouponCode(validation.getCode());
+            savedOrderForReservation.setCouponCode(validation.getCode());
         }
-        order.setSubtotalAmount(total);
-        order.setDiscountAmount(discount);
+        savedOrderForReservation.setSubtotalAmount(total);
+        savedOrderForReservation.setDiscountAmount(discount);
         BigDecimal afterDiscount = total.subtract(discount).max(BigDecimal.ZERO);
         PincodeDeliveryService.DeliveryResolution deliveryResolution = resolveDelivery(settings, request, store, afterDiscount);
-        order.setDeliveryCharge(deliveryResolution.getDeliveryCharge());
-        order.setPromisedMinDeliveryDays(deliveryResolution.getMinDeliveryDays());
-        order.setPromisedMaxDeliveryDays(deliveryResolution.getMaxDeliveryDays());
-        order.setDeliveryRuleId(deliveryResolution.getRuleId());
-        order.setTaxAmount(calculateTax(settings, afterDiscount));
-        order.setTotalAmount(afterDiscount.add(order.getTaxAmount()).add(order.getDeliveryCharge()).setScale(2, RoundingMode.HALF_UP));
+        savedOrderForReservation.setDeliveryCharge(deliveryResolution.getDeliveryCharge());
+        savedOrderForReservation.setPromisedMinDeliveryDays(deliveryResolution.getMinDeliveryDays());
+        savedOrderForReservation.setPromisedMaxDeliveryDays(deliveryResolution.getMaxDeliveryDays());
+        savedOrderForReservation.setDeliveryRuleId(deliveryResolution.getRuleId());
+        savedOrderForReservation.setTaxAmount(calculateTax(settings, afterDiscount));
+        savedOrderForReservation.setTotalAmount(afterDiscount.add(savedOrderForReservation.getTaxAmount()).add(savedOrderForReservation.getDeliveryCharge()).setScale(2, RoundingMode.HALF_UP));
 
-        CustomerOrder saved = customerOrderRepository.save(order);
+        CustomerOrder saved = customerOrderRepository.save(savedOrderForReservation);
         ensureOrderIdentifiers(saved);
         if (!isOnlinePaymentMethod(saved.getPaymentMethod())) {
             notificationService.logOrderEvent("GUEST_ORDER_PLACED", saved, "Guest order placed", "Your order " + saved.getOrderNumber() + " has been placed.");
@@ -581,6 +588,7 @@ public class OrderService {
         }
         boolean orderConfirmed = promoteToConfirmedIfPending(order);
         customerOrderRepository.save(order);
+        finalizeInventoryDeduction(order.getId());
 
         orderTimelineService.record(
                 order,
@@ -693,12 +701,9 @@ public class OrderService {
             cancelOrder(order, order.getCancellationReason(), admin, "ADMIN");
         } else {
             if (previousStatus == OrderStatus.CANCELLED && status != OrderStatus.CANCELLED) {
+                boolean isOnlinePayment = isOnlinePaymentMethod(order.getPaymentMethod()) && order.getPaymentStatus() != PaymentStatus.PAID;
                 for (OrderItem item : order.getItems()) {
-                    if (item.getProductVariant() != null) {
-                        reserveVariantInventory(item.getProductVariant(), item.getQuantity());
-                    } else {
-                        reserveInventory(item.getProduct(), order.getStore(), item.getQuantity());
-                    }
+                    createSoftReservation(order, item.getProduct(), item.getProductVariant(), order.getStore(), item.getQuantity(), isOnlinePayment);
                 }
                 order.setCancelledAt(null);
                 order.setCancellationReason(null);
@@ -1059,6 +1064,7 @@ public class OrderService {
             boolean orderConfirmed = promoteToConfirmedIfPending(order);
             customerOrderRepository.save(order);
             notificationService.logOrderEvent("PAYMENT_SUCCESS", order, "Payment captured", "Payment for " + order.getOrderNumber() + " was captured.");
+            finalizeInventoryDeduction(order.getId());
 
             orderTimelineService.record(
                     order,
@@ -1452,12 +1458,38 @@ public class OrderService {
 
     private void cancelOrder(CustomerOrder order, String reason, User actor, String source) {
         if (order.getStatus() != OrderStatus.CANCELLED) {
-            for (OrderItem item : order.getItems()) {
-                if (item.getProductVariant() != null) {
-                    releaseVariantInventory(item.getProductVariant(), item.getQuantity());
-                } else {
-                    releaseInventory(item.getProduct(), order.getStore(), item.getQuantity());
+            List<StockReservation> reservations = stockReservationRepository.findByOrderId(order.getId());
+            for (StockReservation res : reservations) {
+                if (res.getStatus() == ReservationStatus.COMMITTED) {
+                    if (res.getProductVariant() != null) {
+                        ProductVariant lockedVariant = productVariantRepository.findByIdForUpdate(res.getProductVariant().getId())
+                                .orElseThrow(() -> new ResourceNotFoundException("Variant not found"));
+                        int currentQty = lockedVariant.getStockQuantity() != null ? lockedVariant.getStockQuantity() : 0;
+                        lockedVariant.setStockQuantity(currentQty + res.getQuantity());
+                        lockedVariant.setAvailable(true);
+                        productVariantRepository.save(lockedVariant);
+                    } else {
+                        Product lockedProduct = productRepository.findByIdForUpdate(res.getProduct().getId())
+                                .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
+
+                        if (res.getStore() != null) {
+                            productStoreStockRepository.findByProductIdAndStoreIdForUpdate(lockedProduct.getId(), res.getStore().getId())
+                                    .ifPresent(storeStock -> {
+                                        int storeQty = storeStock.getStockQuantity() != null ? storeStock.getStockQuantity() : 0;
+                                        storeStock.setStockQuantity(storeQty + res.getQuantity());
+                                        productStoreStockRepository.save(storeStock);
+                                    });
+                        }
+
+                        int productQty = lockedProduct.getStockQuantity() != null ? lockedProduct.getStockQuantity() : 0;
+                        lockedProduct.setStockQuantity(productQty + res.getQuantity());
+                        lockedProduct.setAvailable(true);
+                        productRepository.save(lockedProduct);
+                    }
                 }
+                res.setStatus(ReservationStatus.RELEASED);
+                stockReservationRepository.save(res);
+                broadcastStockMutation(res.getProduct().getId());
             }
         }
         order.setStatus(OrderStatus.CANCELLED);
@@ -1476,24 +1508,153 @@ public class OrderService {
         );
     }
 
-    private void reserveVariantInventory(ProductVariant variant, int quantity) {
-        if (Boolean.FALSE.equals(variant.getAvailable()) || variant.getStockQuantity() == null || variant.getStockQuantity() < quantity) {
-            throw new BadRequestException("Variant does not have enough stock");
+    private void createSoftReservation(CustomerOrder order, Product product, ProductVariant variant, Store store, int quantity, boolean isOnlinePayment) {
+        LocalDateTime now = LocalDateTime.now();
+        if (variant != null) {
+            ProductVariant lockedVariant = productVariantRepository.findByIdForUpdate(variant.getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Variant not found"));
+
+            if (Boolean.FALSE.equals(lockedVariant.getAvailable()) || lockedVariant.getStockQuantity() == null) {
+                throw new BadRequestException("Variant does not have enough stock");
+            }
+
+            int activeHolds = stockReservationRepository.getReservedQuantityForVariant(variant.getId(), now);
+            int availableStock = lockedVariant.getStockQuantity() - activeHolds;
+
+            if (availableStock < quantity) {
+                throw new BadRequestException("Variant " + lockedVariant.getSku() + " does not have enough stock");
+            }
+
+            StockReservation reservation = new StockReservation();
+            reservation.setOrder(order);
+            reservation.setProduct(product);
+            reservation.setProductVariant(lockedVariant);
+            reservation.setStore(store);
+            reservation.setQuantity(quantity);
+            
+            if (isOnlinePayment) {
+                reservation.setExpiresAt(now.plusMinutes(15));
+                reservation.setStatus(ReservationStatus.PENDING);
+            } else {
+                reservation.setExpiresAt(now.plusYears(100));
+                reservation.setStatus(ReservationStatus.COMMITTED);
+                lockedVariant.setStockQuantity(lockedVariant.getStockQuantity() - quantity);
+                if (lockedVariant.getStockQuantity() <= 0) {
+                    lockedVariant.setAvailable(false);
+                }
+                productVariantRepository.save(lockedVariant);
+            }
+            stockReservationRepository.save(reservation);
+        } else {
+            Product lockedProduct = productRepository.findByIdForUpdate(product.getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
+
+            if (!lockedProduct.isAvailable() || lockedProduct.getStockQuantity() == null) {
+                throw new BadRequestException(lockedProduct.getTitle() + " does not have enough stock");
+            }
+
+            int activeHolds;
+            int currentStoreStock = lockedProduct.getStockQuantity();
+            com.vrtechnologies.vrtech.entity.ProductStoreStock storeStock = null;
+
+            if (store != null) {
+                storeStock = productStoreStockRepository.findByProductIdAndStoreIdForUpdate(lockedProduct.getId(), store.getId())
+                        .orElse(null);
+                if (storeStock != null) {
+                    currentStoreStock = storeStock.getStockQuantity() != null ? storeStock.getStockQuantity() : 0;
+                }
+                activeHolds = stockReservationRepository.getReservedQuantityForProductStore(lockedProduct.getId(), store.getId(), now);
+            } else {
+                activeHolds = stockReservationRepository.getReservedQuantityForProductGlobal(lockedProduct.getId(), now);
+            }
+
+            int availableStock = currentStoreStock - activeHolds;
+            if (availableStock < quantity) {
+                throw new BadRequestException(lockedProduct.getTitle() + " does not have enough stock");
+            }
+
+            StockReservation reservation = new StockReservation();
+            reservation.setOrder(order);
+            reservation.setProduct(lockedProduct);
+            reservation.setStore(store);
+            reservation.setQuantity(quantity);
+
+            if (isOnlinePayment) {
+                reservation.setExpiresAt(now.plusMinutes(15));
+                reservation.setStatus(ReservationStatus.PENDING);
+            } else {
+                reservation.setExpiresAt(now.plusYears(100));
+                reservation.setStatus(ReservationStatus.COMMITTED);
+                if (storeStock != null) {
+                    storeStock.setStockQuantity(storeStock.getStockQuantity() - quantity);
+                    productStoreStockRepository.save(storeStock);
+                }
+                lockedProduct.setStockQuantity(lockedProduct.getStockQuantity() - quantity);
+                if (lockedProduct.getStockQuantity() <= 0) {
+                    lockedProduct.setAvailable(false);
+                }
+                productRepository.save(lockedProduct);
+            }
+            stockReservationRepository.save(reservation);
         }
-        variant.setStockQuantity(variant.getStockQuantity() - quantity);
-        if (variant.getStockQuantity() <= 0) {
-            variant.setAvailable(false);
-        }
-        productVariantRepository.save(variant);
+        broadcastStockMutation(product.getId());
     }
 
-    private void releaseVariantInventory(ProductVariant variant, int quantity) {
-        int current = variant.getStockQuantity() == null ? 0 : variant.getStockQuantity();
-        variant.setStockQuantity(current + quantity);
-        if (variant.getStockQuantity() > 0) {
-            variant.setAvailable(true);
+    private void broadcastStockMutation(Long productId) {
+        try {
+            SystemEvent event = SystemEvent.builder()
+                    .eventType("STOCK_MUTATION")
+                    .title("Inventory Mutated")
+                    .message("Product inventory state updated")
+                    .severity("INFO")
+                    .payload(java.util.Map.of("productId", productId))
+                    .timestamp(LocalDateTime.now())
+                    .build();
+            sseEmitterService.broadcast(event);
+        } catch (Exception e) {
+            // suppress
         }
-        productVariantRepository.save(variant);
+    }
+
+    @Transactional
+    public void finalizeInventoryDeduction(Long orderId) {
+        List<StockReservation> reservations = stockReservationRepository.findByOrderIdAndStatus(orderId, ReservationStatus.PENDING);
+        for (StockReservation res : reservations) {
+            res.setStatus(ReservationStatus.COMMITTED);
+            res.setExpiresAt(LocalDateTime.now().plusYears(100));
+            stockReservationRepository.save(res);
+
+            if (res.getProductVariant() != null) {
+                ProductVariant lockedVariant = productVariantRepository.findByIdForUpdate(res.getProductVariant().getId())
+                        .orElseThrow(() -> new ResourceNotFoundException("Variant not found"));
+                int currentQty = lockedVariant.getStockQuantity() != null ? lockedVariant.getStockQuantity() : 0;
+                lockedVariant.setStockQuantity(Math.max(0, currentQty - res.getQuantity()));
+                if (lockedVariant.getStockQuantity() <= 0) {
+                    lockedVariant.setAvailable(false);
+                }
+                productVariantRepository.save(lockedVariant);
+            } else {
+                Product lockedProduct = productRepository.findByIdForUpdate(res.getProduct().getId())
+                        .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
+
+                if (res.getStore() != null) {
+                    productStoreStockRepository.findByProductIdAndStoreIdForUpdate(lockedProduct.getId(), res.getStore().getId())
+                            .ifPresent(storeStock -> {
+                                int storeQty = storeStock.getStockQuantity() != null ? storeStock.getStockQuantity() : 0;
+                                storeStock.setStockQuantity(Math.max(0, storeQty - res.getQuantity()));
+                                productStoreStockRepository.save(storeStock);
+                            });
+                }
+
+                int productQty = lockedProduct.getStockQuantity() != null ? lockedProduct.getStockQuantity() : 0;
+                lockedProduct.setStockQuantity(Math.max(0, productQty - res.getQuantity()));
+                if (lockedProduct.getStockQuantity() <= 0) {
+                    lockedProduct.setAvailable(false);
+                }
+                productRepository.save(lockedProduct);
+            }
+            broadcastStockMutation(res.getProduct().getId());
+        }
     }
 
     private ProductVariantResponse toVariantResponse(ProductVariant variant) {

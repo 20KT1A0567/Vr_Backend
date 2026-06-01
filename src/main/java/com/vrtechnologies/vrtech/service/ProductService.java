@@ -48,6 +48,8 @@ import com.vrtechnologies.vrtech.entity.ProductVariant;
 import com.vrtechnologies.vrtech.entity.AttributeValue;
 import com.vrtechnologies.vrtech.dto.event.PriceUpdatedEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import com.vrtechnologies.vrtech.entity.StockReservation;
+import com.vrtechnologies.vrtech.repository.StockReservationRepository;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -86,6 +88,7 @@ public class ProductService {
     private final SseEmitterService sseEmitterService;
     private final ProductPriceHistoryRepository productPriceHistoryRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final StockReservationRepository stockReservationRepository;
 
     public ProductService(
             ProductRepository productRepository,
@@ -100,7 +103,8 @@ public class ProductService {
             NotificationService notificationService,
             SseEmitterService sseEmitterService,
             ProductPriceHistoryRepository productPriceHistoryRepository,
-            ApplicationEventPublisher eventPublisher
+            ApplicationEventPublisher eventPublisher,
+            StockReservationRepository stockReservationRepository
     ) {
         this.productRepository = productRepository;
         this.brandRepository = brandRepository;
@@ -115,6 +119,7 @@ public class ProductService {
         this.sseEmitterService = sseEmitterService;
         this.productPriceHistoryRepository = productPriceHistoryRepository;
         this.eventPublisher = eventPublisher;
+        this.stockReservationRepository = stockReservationRepository;
     }
 
     @Scheduled(fixedDelayString = "${app.low-stock-alerts.worker.delay-ms:900000}")
@@ -639,6 +644,8 @@ public class ProductService {
 
         Map<Long, Map<Long, Integer>> stocksMap = new java.util.LinkedHashMap<>();
         Map<Long, List<ProductPriceHistory>> historiesMap = new java.util.LinkedHashMap<>();
+        Map<Long, Integer> productHoldsMap = new java.util.HashMap<>();
+        Map<Long, Integer> variantHoldsMap = new java.util.HashMap<>();
 
         if (!productIds.isEmpty()) {
             try {
@@ -647,12 +654,12 @@ public class ProductService {
                     stocksMap = stocks.stream()
                             .filter(s -> s.getProduct() != null && s.getStore() != null)
                             .collect(Collectors.groupingBy(
-                                    s -> s.getProduct().getId(),
-                                    Collectors.toMap(
-                                            s -> s.getStore().getId(),
-                                            s -> s.getStockQuantity() == null ? 0 : s.getStockQuantity(),
-                                            (existing, replacement) -> existing
-                                    )
+                                     s -> s.getProduct().getId(),
+                                     Collectors.toMap(
+                                             s -> s.getStore().getId(),
+                                             s -> s.getStockQuantity() == null ? 0 : s.getStockQuantity(),
+                                             (existing, replacement) -> existing
+                                     )
                             ));
                 }
             } catch (Exception e) {
@@ -670,21 +677,54 @@ public class ProductService {
             } catch (Exception e) {
                 // fallback
             }
+
+            try {
+                List<StockReservation> activeReservations = stockReservationRepository.findByStatusAndExpiresAtAfter(
+                        com.vrtechnologies.vrtech.entity.enums.ReservationStatus.PENDING, LocalDateTime.now());
+                if (activeReservations != null) {
+                    for (StockReservation res : activeReservations) {
+                        if (res.getProduct() != null) {
+                            Long pid = res.getProduct().getId();
+                            productHoldsMap.put(pid, productHoldsMap.getOrDefault(pid, 0) + res.getQuantity());
+                        }
+                        if (res.getProductVariant() != null) {
+                            Long vid = res.getProductVariant().getId();
+                            variantHoldsMap.put(vid, variantHoldsMap.getOrDefault(vid, 0) + res.getQuantity());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                // fallback
+            }
         }
 
         final Map<Long, Map<Long, Integer>> finalStocksMap = stocksMap;
         final Map<Long, List<ProductPriceHistory>> finalHistoriesMap = historiesMap;
+        final Map<Long, Integer> finalProductHoldsMap = productHoldsMap;
+        final Map<Long, Integer> finalVariantHoldsMap = variantHoldsMap;
 
         return products.stream()
                 .map(p -> toProductResponseOptimized(
                         p,
                         finalStocksMap.getOrDefault(p.getId(), Map.of()),
-                        finalHistoriesMap.getOrDefault(p.getId(), List.of())
+                        finalHistoriesMap.getOrDefault(p.getId(), List.of()),
+                        finalProductHoldsMap,
+                        finalVariantHoldsMap
                 ))
                 .toList();
     }
 
-    private ProductResponse toProductResponseOptimized(Product product, Map<Long, Integer> productStocks, List<ProductPriceHistory> productHistory) {
+    private ProductResponse toProductResponseOptimized(
+            Product product, 
+            Map<Long, Integer> productStocks, 
+            List<ProductPriceHistory> productHistory,
+            Map<Long, Integer> productHolds,
+            Map<Long, Integer> variantHolds
+    ) {
+        int productHold = productHolds.getOrDefault(product.getId(), 0);
+        int physicalStock = product.getStockQuantity() == null ? 0 : product.getStockQuantity();
+        int availableStock = Math.max(0, physicalStock - productHold);
+
         return ProductResponse.builder()
                 .id(product.getId())
                 .title(product.getTitle())
@@ -716,7 +756,9 @@ public class ProductService {
                 .price(product.getPrice())
                 .originalPrice(product.getOriginalPrice())
                 .discountPercent(product.getDiscountPercent())
-                .stockQuantity(product.getStockQuantity())
+                .stockQuantity(physicalStock)
+                .availableStockQuantity(availableStock)
+                .activeReservationsCount(productHold)
                 .available(product.isAvailable())
                 .featured(product.isFeatured())
                 .bestSeller(product.isBestSellerEnabled())
@@ -750,23 +792,29 @@ public class ProductService {
                 .createdAt(product.getCreatedAt())
                 .updatedAt(product.getUpdatedAt())
                 .lowestPrice90Days(calculateLowestPrice90DaysOptimized(product.getPrice(), productHistory))
-                .variants(product.getVariants() == null ? List.of() : product.getVariants().stream().map(this::toVariantResponse).toList())
+                .variants(product.getVariants() == null ? List.of() : product.getVariants().stream().map(v -> toVariantResponse(v, variantHolds)).toList())
                 .build();
     }
 
-    private ProductVariantResponse toVariantResponse(ProductVariant variant) {
+    private ProductVariantResponse toVariantResponse(ProductVariant variant, Map<Long, Integer> variantHolds) {
         Map<String, String> attrs = new LinkedHashMap<>();
         if (variant.getAttributeValues() != null) {
             for (AttributeValue av : variant.getAttributeValues()) {
                 attrs.put(av.getAttribute().getName(), av.getValue());
             }
         }
+        int variantHold = variantHolds.getOrDefault(variant.getId(), 0);
+        int physicalStock = variant.getStockQuantity() == null ? 0 : variant.getStockQuantity();
+        int availableStock = Math.max(0, physicalStock - variantHold);
+
         return ProductVariantResponse.builder()
                 .id(variant.getId())
                 .sku(variant.getSku())
                 .price(variant.getPrice())
                 .originalPrice(variant.getOriginalPrice())
-                .stockQuantity(variant.getStockQuantity())
+                .stockQuantity(physicalStock)
+                .availableStockQuantity(availableStock)
+                .activeReservationsCount(variantHold)
                 .lowStockThreshold(variant.getLowStockThreshold())
                 .available(variant.getAvailable() == null || variant.getAvailable())
                 .attributes(attrs)

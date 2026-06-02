@@ -91,6 +91,58 @@ public class CartService {
     }
 
     @Transactional
+    public List<CartItemResponse> syncCart(List<CartItemRequest> items) {
+        User user = userContextService.getCurrentUser();
+        
+        for (CartItemRequest request : items) {
+            Product product = productRepository.findById(request.getProductId()).orElse(null);
+            if (product == null) continue;
+
+            ProductVariant variant = null;
+            if (request.getProductVariantId() != null) {
+                variant = productVariantRepository.findById(request.getProductVariantId()).orElse(null);
+                if (variant == null || !variant.getProduct().getId().equals(product.getId())) {
+                    continue;
+                }
+            }
+
+            try {
+                validateProductOrVariantAvailability(product, variant);
+            } catch (Exception e) {
+                continue;
+            }
+
+            final ProductVariant finalVariant = variant;
+            List<CartItem> matchingItems = cartItemRepository.findByUserIdOrderByIdAsc(user.getId()).stream()
+                    .filter(item -> item.getProduct().getId().equals(product.getId()) &&
+                            (finalVariant == null ? item.getProductVariant() == null :
+                             item.getProductVariant() != null && item.getProductVariant().getId().equals(finalVariant.getId())))
+                    .collect(Collectors.toList());
+
+            CartItem item = matchingItems.stream().findFirst().orElseGet(CartItem::new);
+            int nextQuantity = matchingItems.stream().mapToInt(this::getQuantityOrZero).sum() + getQuantityOrDefault(request.getQuantity());
+            
+            try {
+                validateProductOrVariantQuantity(product, variant, nextQuantity);
+            } catch (Exception e) {
+                nextQuantity = variant != null && variant.getStockQuantity() != null ? variant.getStockQuantity() : 
+                               (product.getStockQuantity() != null ? product.getStockQuantity() : nextQuantity);
+                if (nextQuantity < 1) continue;
+            }
+
+            item.setUser(user);
+            item.setProduct(product);
+            item.setProductVariant(variant);
+            item.setQuantity(nextQuantity);
+            item.setRecoveryNotified(false);
+            cartItemRepository.save(item);
+            deleteDuplicateRows(item, matchingItems);
+        }
+        
+        return buildNormalizedCartResponse(user.getId());
+    }
+
+    @Transactional
     public List<CartItemResponse> updateItem(Long itemId, UpdateQuantityRequest request) {
         User user = userContextService.getCurrentUser();
         CartItem item = cartItemRepository.findById(itemId)

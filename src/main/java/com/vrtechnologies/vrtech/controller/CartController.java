@@ -37,6 +37,11 @@ public class CartController {
         return ApiResponse.ok("Cart updated", cartService.addToCart(request));
     }
 
+    @PostMapping("/sync")
+    public ApiResponse<List<CartItemResponse>> syncCart(@Valid @RequestBody List<CartItemRequest> items) {
+        return ApiResponse.ok("Cart synced", cartService.syncCart(items));
+    }
+
     @PutMapping("/update/{itemId}")
     public ApiResponse<List<CartItemResponse>> updateCartItem(@PathVariable Long itemId, @Valid @RequestBody UpdateQuantityRequest request) {
         return ApiResponse.ok("Cart updated", cartService.updateItem(itemId, request));

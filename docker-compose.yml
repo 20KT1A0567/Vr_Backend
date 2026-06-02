@@ -8,3 +8,16 @@ services:
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     restart: unless-stopped
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

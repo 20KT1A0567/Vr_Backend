@@ -54,7 +54,7 @@ public class CustomerOrder extends BaseEntity {
     private String invoiceNumber;
 
     @Column(nullable = false, precision = 10, scale = 2)
-    private BigDecimal totalAmount;
+    private BigDecimal totalAmount = BigDecimal.ZERO;
 
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal subtotalAmount = BigDecimal.ZERO;

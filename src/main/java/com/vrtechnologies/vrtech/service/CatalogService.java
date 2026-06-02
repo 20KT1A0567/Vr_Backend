@@ -18,6 +18,8 @@ import com.vrtechnologies.vrtech.repository.BannerRepository;
 import com.vrtechnologies.vrtech.repository.BrandRepository;
 import com.vrtechnologies.vrtech.repository.CategoryRepository;
 import com.vrtechnologies.vrtech.repository.StoreRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Sort;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.access.AccessDeniedException;
@@ -51,14 +53,17 @@ public class CatalogService {
         this.permissionService = permissionService;
     }
 
+    @Cacheable("brands")
     public List<Brand> getBrands() {
         return brandRepository.findAll(Sort.by(Sort.Direction.ASC, "name"));
     }
 
+    @Cacheable("categories")
     public List<Category> getCategories() {
         return categoryRepository.findAll(Sort.by(Sort.Direction.ASC, "name"));
     }
 
+    @Cacheable("stores")
     public List<Store> getStores() {
         return getStores(false);
     }
@@ -77,6 +82,7 @@ public class CatalogService {
                 .toList();
     }
 
+    @Cacheable("catalog")
     public List<BannerResponse> getBanners() {
         return getBanners(false, null);
     }
@@ -94,6 +100,7 @@ public class CatalogService {
                 .toList();
     }
 
+    @CacheEvict(value = "catalog", allEntries = true)
     public BannerResponse saveBanner(BannerRequest request, Long id) {
         Banner banner = id == null ? new Banner() : bannerRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Banner not found"));
@@ -121,14 +128,17 @@ public class CatalogService {
         return toBannerResponse(bannerRepository.save(banner));
     }
 
+    @CacheEvict(value = "catalog", allEntries = true)
     public void deleteBanner(Long id) {
         bannerRepository.deleteById(id);
     }
 
+    @CacheEvict(value = "brands", allEntries = true)
     public Brand createBrand(BrandRequest request) {
         return saveBrand(request, null);
     }
 
+    @CacheEvict(value = "brands", allEntries = true)
     public Brand saveBrand(BrandRequest request, Long id) {
         String normalizedName = request.getName() == null ? "" : request.getName().trim();
         if (normalizedName.isBlank()) {
@@ -156,6 +166,7 @@ public class CatalogService {
         }
     }
 
+    @CacheEvict(value = "brands", allEntries = true)
     public void deleteBrand(Long id) {
         try {
             brandRepository.deleteById(id);
@@ -164,10 +175,12 @@ public class CatalogService {
         }
     }
 
+    @CacheEvict(value = "categories", allEntries = true)
     public Category createCategory(CategoryRequest request) {
         return saveCategory(request, null);
     }
 
+    @CacheEvict(value = "categories", allEntries = true)
     public Category saveCategory(CategoryRequest request, Long id) {
         Category category = id == null ? new Category() : categoryRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Category not found"));
@@ -187,6 +200,7 @@ public class CatalogService {
         }
     }
 
+    @CacheEvict(value = "categories", allEntries = true)
     public void deleteCategory(Long id) {
         try {
             categoryRepository.deleteById(id);
@@ -195,6 +209,7 @@ public class CatalogService {
         }
     }
 
+    @CacheEvict(value = "stores", allEntries = true)
     public Store saveStore(User admin, StoreRequest request, Long id) {
         Store store = id == null ? new Store() : storeRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Store not found"));
@@ -219,6 +234,7 @@ public class CatalogService {
         return storeRepository.save(store);
     }
 
+    @CacheEvict(value = "stores", allEntries = true)
     public void deleteStore(User admin, Long id) {
         Store store = storeRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Store not found"));

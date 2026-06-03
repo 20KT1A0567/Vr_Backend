@@ -111,8 +111,8 @@ jobs:
             echo "FLYWAY_ENABLED=${{ secrets.FLYWAY_ENABLED }}"
             echo "WEBAUTHN_RP_ID=myadmin.anushatechnologies.com"
             echo "WEBAUTHN_RP_NAME=VR Technologies Admin"
-            echo "REDIS_HOST=${{ secrets.REDIS_HOST }}"
-            echo "REDIS_PORT=${{ secrets.REDIS_PORT }}"
+            echo "REDIS_HOST=${{ secrets.REDIS_HOST || '172.17.0.1' }}"
+            echo "REDIS_PORT=${{ secrets.REDIS_PORT || '6379' }}"
             echo "REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}"
           } > /tmp/app.env
           echo "Created .env with $(wc -l < /tmp/app.env) variables"

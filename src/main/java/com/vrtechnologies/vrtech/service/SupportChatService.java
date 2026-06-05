@@ -63,12 +63,31 @@ public class SupportChatService {
                 "Do not include markdown blocks or any other text outside the JSON object.";
 
         try {
-            // Build Gemini request body
-            Map<String, Object> textPart = Map.of("text", systemInstruction + "\n\nUser: " + request.getMessage());
-            Map<String, Object> content = Map.of("parts", List.of(textPart));
+            List<Map<String, Object>> contents = new ArrayList<>();
+            if (request.getHistory() != null && !request.getHistory().isEmpty()) {
+                for (SupportChatRequest.ChatMessage msg : request.getHistory()) {
+                    if (msg.getContent() == null || msg.getContent().trim().isEmpty()) continue;
+                    String role = "user".equalsIgnoreCase(msg.getRole()) ? "user" : "model";
+                    contents.add(Map.of(
+                        "role", role,
+                        "parts", List.of(Map.of("text", msg.getContent()))
+                    ));
+                }
+            } else {
+                contents.add(Map.of(
+                    "role", "user",
+                    "parts", List.of(Map.of("text", request.getMessage()))
+                ));
+            }
+
+            Map<String, Object> systemInstructionObj = Map.of(
+                "parts", List.of(Map.of("text", systemInstruction))
+            );
+
             Map<String, Object> generationConfig = Map.of("temperature", 0.1, "maxOutputTokens", 512);
             Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("contents", List.of(content));
+            requestBody.put("contents", contents);
+            requestBody.put("systemInstruction", systemInstructionObj);
             requestBody.put("generationConfig", generationConfig);
 
             HttpHeaders headers = new HttpHeaders();

@@ -1,6 +1,6 @@
 package com.vrtechnologies.vrtech.dto;
 
-import com.vrtechnologies.vrtech.entity.Product;
+import com.vrtechnologies.vrtech.dto.response.ProductResponse;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -14,5 +14,6 @@ import java.util.List;
 @AllArgsConstructor
 public class SupportChatResponse {
     private String replyText;
-    private List<Product> products;
+    private List<ProductResponse> products;
 }
+

@@ -7,6 +7,7 @@ import com.vrtechnologies.vrtech.dto.SupportChatRequest;
 import com.vrtechnologies.vrtech.dto.SupportChatResponse;
 import com.vrtechnologies.vrtech.entity.Product;
 import com.vrtechnologies.vrtech.repository.ProductRepository;
+import com.vrtechnologies.vrtech.dto.response.ProductResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +26,7 @@ import java.util.stream.Collectors;
 public class SupportChatService {
 
     private final ProductRepository productRepository;
+    private final ProductService productService;
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate = new RestTemplate();
 
@@ -137,7 +139,7 @@ public class SupportChatService {
 
             return SupportChatResponse.builder()
                     .replyText(replyText)
-                    .products(orderedProducts)
+                    .products(productService.toProductResponseList(orderedProducts))
                     .build();
 
         } catch (Exception e) {
@@ -249,7 +251,7 @@ public class SupportChatService {
 
         return SupportChatResponse.builder()
                 .replyText(reply.toString())
-                .products(filtered)
+                .products(productService.toProductResponseList(filtered))
                 .build();
     }
 
@@ -309,7 +311,7 @@ public class SupportChatService {
                     
             return SupportChatResponse.builder()
                     .replyText(replyText)
-                    .products(orderedProducts)
+                    .products(productService.toProductResponseList(orderedProducts))
                     .build();
                     
         } catch (Exception e) {

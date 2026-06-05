@@ -42,9 +42,9 @@ public class SupportChatService {
             return localSmartMatch(request.getMessage());
         }
 
-        // Fetch top 50 available products for context
+        // Fetch top 150 available products for context
         List<Product> availableProducts = productRepository.findByAvailableTrueOrderByUpdatedAtDesc();
-        List<Product> contextProducts = availableProducts.stream().limit(50).collect(Collectors.toList());
+        List<Product> contextProducts = availableProducts.stream().limit(150).collect(Collectors.toList());
 
         String productCatalogContext = buildCatalogJson(contextProducts);
 
@@ -239,11 +239,16 @@ public class SupportChatService {
             Map<String, Object> map = new HashMap<>();
             map.put("id", p.getId());
             map.put("title", p.getTitle());
+            map.put("brand", p.getBrand() != null ? p.getBrand().getName() : null);
             map.put("category", p.getCategory() != null ? p.getCategory().getName() : null);
             map.put("price", p.getPrice());
             map.put("discountPercent", p.getDiscountPercent());
             map.put("processor", p.getProcessor());
+            map.put("processorGen", p.getProcessorGeneration());
             map.put("ramGb", p.getRamGb());
+            map.put("storageGb", p.getStorageGb());
+            map.put("storageType", p.getStorageType());
+            map.put("condition", p.getProductCondition() != null ? p.getProductCondition().name() : null);
             map.put("graphicsCard", p.getGraphicsCard());
             return map;
         }).collect(Collectors.toList());

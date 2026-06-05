@@ -28,14 +28,17 @@ public class SupportChatService {
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate = new RestTemplate();
 
-    @Value("${OPENAI_API_KEY:}")
-    private String openAiApiKey;
+    @Value("${GEMINI_API_KEY:}")
+    private String geminiApiKey;
+
+    private static final String GEMINI_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=";
 
     public SupportChatResponse handleChat(SupportChatRequest request) {
         log.info("Handling support chat for message: {}", request.getMessage());
 
-        if (openAiApiKey == null || openAiApiKey.trim().isEmpty()) {
-            log.info("OPENAI_API_KEY not configured — using local smart matching.");
+        if (geminiApiKey == null || geminiApiKey.trim().isEmpty()) {
+            log.info("GEMINI_API_KEY not configured — using local smart matching.");
             return localSmartMatch(request.getMessage());
         }
 
@@ -45,7 +48,7 @@ public class SupportChatService {
 
         String productCatalogContext = buildCatalogJson(contextProducts);
 
-        String systemPrompt = "You are the AI Concierge for VR Technologies, a refurbished laptop marketplace. " +
+        String systemInstruction = "You are the AI Concierge for VR Technologies, a refurbished laptop marketplace. " +
                 "You help customers find the best laptops for their needs.\n" +
                 "Here is our current active product catalog in JSON format:\n" +
                 productCatalogContext + "\n\n" +
@@ -60,30 +63,67 @@ public class SupportChatService {
                 "Do not include markdown blocks or any other text outside the JSON object.";
 
         try {
+            // Build Gemini request body
+            Map<String, Object> textPart = Map.of("text", systemInstruction + "\n\nUser: " + request.getMessage());
+            Map<String, Object> content = Map.of("parts", List.of(textPart));
+            Map<String, Object> generationConfig = Map.of("temperature", 0.1, "maxOutputTokens", 512);
             Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("model", "gpt-4o-mini");
-            
-            List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "system", "content", systemPrompt));
-            messages.add(Map.of("role", "user", "content", request.getMessage()));
-            requestBody.put("messages", messages);
-            
-            // Set temperature low for reliable JSON output
-            requestBody.put("temperature", 0.1);
-            
+            requestBody.put("contents", List.of(content));
+            requestBody.put("generationConfig", generationConfig);
+
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(openAiApiKey);
-            
+
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-            
-            String responseJson = restTemplate.postForObject("https://api.openai.com/v1/chat/completions", entity, String.class);
-            
-            return parseOpenAiResponse(responseJson, contextProducts);
-            
+            String responseJson = restTemplate.postForObject(GEMINI_URL + geminiApiKey, entity, String.class);
+
+            return parseGeminiResponse(responseJson, contextProducts);
+
         } catch (Exception e) {
-            log.error("Error communicating with OpenAI API: {}", e.getMessage(), e);
+            log.error("Error communicating with Gemini API: {}", e.getMessage(), e);
             return localSmartMatch(request.getMessage());
+        }
+    }
+
+    private SupportChatResponse parseGeminiResponse(String responseJson, List<Product> contextProducts) {
+        try {
+            JsonNode root = objectMapper.readTree(responseJson);
+            // Gemini response: candidates[0].content.parts[0].text
+            String content = root.path("candidates").get(0)
+                    .path("content").path("parts").get(0)
+                    .path("text").asText();
+
+            // Strip markdown fences if present
+            content = content.replaceAll("```json", "").replaceAll("```", "").trim();
+            // Extract first JSON object
+            int start = content.indexOf('{');
+            int end = content.lastIndexOf('}');
+            if (start >= 0 && end > start) content = content.substring(start, end + 1);
+
+            JsonNode contentJson = objectMapper.readTree(content);
+            String replyText = contentJson.path("replyText").asText("Here are some recommendations:");
+
+            List<Long> productIds = new ArrayList<>();
+            JsonNode idsNode = contentJson.path("productIds");
+            if (idsNode.isArray()) {
+                for (JsonNode idNode : idsNode) productIds.add(idNode.asLong());
+            }
+
+            List<Product> matchedProducts = productRepository.findByIdIn(productIds);
+            Map<Long, Product> productMap = matchedProducts.stream().collect(Collectors.toMap(Product::getId, p -> p));
+            List<Product> orderedProducts = productIds.stream()
+                    .map(productMap::get)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+
+            return SupportChatResponse.builder()
+                    .replyText(replyText)
+                    .products(orderedProducts)
+                    .build();
+
+        } catch (Exception e) {
+            log.error("Failed to parse Gemini response: {}", e.getMessage(), e);
+            return localSmartMatch("");
         }
     }
 

@@ -35,8 +35,8 @@ public class SupportChatService {
         log.info("Handling support chat for message: {}", request.getMessage());
 
         if (openAiApiKey == null || openAiApiKey.trim().isEmpty()) {
-            log.warn("OPENAI_API_KEY is not configured! Falling back to basic response.");
-            return fallbackResponse();
+            log.info("OPENAI_API_KEY not configured — using local smart matching.");
+            return localSmartMatch(request.getMessage());
         }
 
         // Fetch top 50 available products for context
@@ -83,8 +83,115 @@ public class SupportChatService {
             
         } catch (Exception e) {
             log.error("Error communicating with OpenAI API: {}", e.getMessage(), e);
-            return fallbackResponse();
+            return localSmartMatch(request.getMessage());
         }
+    }
+
+    /**
+     * Local smart matcher — works without OpenAI.
+     * Parses budget, RAM, and brand keywords from the message and queries the DB.
+     */
+    private SupportChatResponse localSmartMatch(String userMessage) {
+        String msg = userMessage == null ? "" : userMessage.toLowerCase();
+
+        // 1. Parse budget / maxPrice
+        java.math.BigDecimal maxPrice = null;
+        java.util.regex.Pattern pricePattern = java.util.regex.Pattern.compile(
+                "(?:under|below|less than|within|budget|max|upto)?\\s*(?:rs\\.?|inr|₹)?\\s*(\\d[\\d,]*)\\s*(k)?",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+        java.util.regex.Matcher priceMatcher = pricePattern.matcher(msg);
+        while (priceMatcher.find()) {
+            try {
+                String raw = priceMatcher.group(1).replace(",", "");
+                long val = Long.parseLong(raw);
+                if (priceMatcher.group(2) != null) val *= 1000;
+                if (val >= 5000 && val <= 500000) {
+                    maxPrice = java.math.BigDecimal.valueOf(val);
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+
+        // 2. Parse RAM requirements
+        List<Integer> ramOptions = null;
+        java.util.regex.Pattern ramPattern = java.util.regex.Pattern.compile("(\\d+)\\s*(?:gb)?\\s*ram", java.util.regex.Pattern.CASE_INSENSITIVE);
+        java.util.regex.Matcher ramMatcher = ramPattern.matcher(msg);
+        while (ramMatcher.find()) {
+            try {
+                int r = Integer.parseInt(ramMatcher.group(1));
+                if (r == 4 || r == 8 || r == 16 || r == 32 || r == 64) {
+                    if (ramOptions == null) ramOptions = new ArrayList<>();
+                    ramOptions.add(r);
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+        // Also catch "16gb" without "ram"
+        if (ramOptions == null) {
+            java.util.regex.Matcher gbMatcher = java.util.regex.Pattern.compile("(4|8|16|32|64)\\s*gb", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(msg);
+            while (gbMatcher.find()) {
+                if (ramOptions == null) ramOptions = new ArrayList<>();
+                ramOptions.add(Integer.parseInt(gbMatcher.group(1)));
+            }
+        }
+
+        // 3. Brand / keyword detection
+        String query = null;
+        if (msg.contains("dell")) query = "Dell";
+        else if (msg.contains("hp") || msg.contains("hewlett")) query = "HP";
+        else if (msg.contains("lenovo") || msg.contains("thinkpad") || msg.contains("ideapad")) query = "Lenovo";
+        else if (msg.contains("macbook") || msg.contains("apple") || msg.contains("mac")) query = "Apple";
+        else if (msg.contains("asus") || msg.contains("rog") || msg.contains("vivobook") || msg.contains("zenbook")) query = "Asus";
+        else if (msg.contains("acer") || msg.contains("aspire") || msg.contains("nitro")) query = "Acer";
+        else if (msg.contains("msi")) query = "MSI";
+        else if (msg.contains("samsung")) query = "Samsung";
+        else if (msg.contains("gaming")) query = "gaming";
+        else if (msg.contains("student") || msg.contains("study") || msg.contains("college")) query = "student";
+        else if (msg.contains("office") || msg.contains("work") || msg.contains("business")) query = "office";
+        else if (msg.contains("video edit") || msg.contains("editing")) query = "editing";
+        else if (msg.contains("design") || msg.contains("graphic")) query = "design";
+
+        // 4. Query DB
+        final java.math.BigDecimal finalMaxPrice = maxPrice;
+        final List<Integer> finalRamOptions = ramOptions;
+        final String finalQuery = query;
+        List<Product> allAvailable = productRepository.findByAvailableTrueOrderByUpdatedAtDesc();
+        List<Product> filtered = allAvailable.stream()
+            .filter(p -> {
+                if (finalRamOptions != null && !finalRamOptions.isEmpty()) {
+                    if (p.getRamGb() == null || !finalRamOptions.contains(p.getRamGb())) return false;
+                }
+                if (finalMaxPrice != null && p.getPrice() != null) {
+                    if (p.getPrice().compareTo(finalMaxPrice) > 0) return false;
+                }
+                if (finalQuery != null) {
+                    String title = p.getTitle() != null ? p.getTitle().toLowerCase() : "";
+                    String brand = (p.getBrand() != null && p.getBrand().getName() != null) ? p.getBrand().getName().toLowerCase() : "";
+                    String proc = p.getProcessor() != null ? p.getProcessor().toLowerCase() : "";
+                    if (!title.contains(finalQuery.toLowerCase()) && !brand.contains(finalQuery.toLowerCase()) && !proc.contains(finalQuery.toLowerCase())) {
+                        return false;
+                    }
+                }
+                return true;
+            })
+            .limit(4)
+            .collect(Collectors.toList());
+
+        // 5. If no matches, return top available products
+        if (filtered.isEmpty()) {
+            filtered = allAvailable.stream().limit(4).collect(Collectors.toList());
+        }
+
+        // 6. Build human-readable reply
+        StringBuilder reply = new StringBuilder("Great choice! Here are");
+        if (query != null) reply.append(" ").append(query);
+        if (finalRamOptions != null && !finalRamOptions.isEmpty()) reply.append(" ").append(finalRamOptions.get(0)).append("GB RAM");
+        reply.append(" laptops");
+        if (finalMaxPrice != null) reply.append(" under ₹").append(String.format("%,.0f", finalMaxPrice));
+        reply.append(" from our certified refurbished inventory:");
+
+        return SupportChatResponse.builder()
+                .replyText(reply.toString())
+                .products(filtered)
+                .build();
     }
 
     private String buildCatalogJson(List<Product> products) {

@@ -25,6 +25,7 @@ public class AuthResponse {
     private LocalDateTime refreshTokenExpiresAt;
     private List<String> visibleModules;
     private boolean twoFactorEnabled;
+    private String trustedDeviceToken;
 
     @Singular
     private List<PermissionSummary> permissions;

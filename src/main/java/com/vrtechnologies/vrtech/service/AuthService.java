@@ -78,6 +78,7 @@ public class AuthService {
     private final AdminEmailOtpService adminEmailOtpService;
     private final AdminBackupCodeService backupCodeService;
     private final SiteSettingsRepository siteSettingsRepository;
+    private final TrustedDeviceService trustedDeviceService;
 
     @Value("${app.admin.otp.required-roles:SUPER_ADMIN}")
     private String otpRequiredRolesProperty;
@@ -95,7 +96,8 @@ public class AuthService {
             PermissionService permissionService,
             AdminEmailOtpService adminEmailOtpService,
             AdminBackupCodeService backupCodeService,
-            SiteSettingsRepository siteSettingsRepository
+            SiteSettingsRepository siteSettingsRepository,
+            TrustedDeviceService trustedDeviceService
     ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
@@ -110,6 +112,7 @@ public class AuthService {
         this.adminEmailOtpService = adminEmailOtpService;
         this.backupCodeService = backupCodeService;
         this.siteSettingsRepository = siteSettingsRepository;
+        this.trustedDeviceService = trustedDeviceService;
     }
 
     public AuthResponse register(RegisterRequest request) {
@@ -132,10 +135,10 @@ public class AuthService {
     }
 
     public LoginOutcome login(LoginRequest request) {
-        return login(request, null, null);
+        return login(request, null, null, null);
     }
 
-    public LoginOutcome login(LoginRequest request, String ipAddress, String userAgent) {
+    public LoginOutcome login(LoginRequest request, String ipAddress, String userAgent, String trustedDeviceToken) {
         String email = request.getEmail() == null ? "" : request.getEmail().trim();
         userRepository.findByEmailIgnoreCase(email)
                 .filter(user -> user.getRole() != Role.USER)
@@ -159,7 +162,9 @@ public class AuthService {
         ensureUserCanAuthenticate(user);
         checkAdminIpWhitelist(user, ipAddress);
 
-        if (user.getRole() != Role.USER && requiresTwoFactor(user)) {
+        boolean isTrusted = trustedDeviceService.isDeviceTrusted(user, trustedDeviceToken);
+
+        if (!isTrusted && user.getRole() != Role.USER && requiresTwoFactor(user)) {
             if (user.isTotpEnabled()) {
                 AdminEmailOtpService.IssuedChallenge challenge = adminEmailOtpService.issueTotpChallenge(user, ipAddress, userAgent);
                 activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
@@ -184,11 +189,14 @@ public class AuthService {
                         .build());
             }
         }
+        if (isTrusted) {
+            return LoginOutcome.authenticated(finalizeAdminLogin(user, ipAddress, userAgent, false));
+        }
 
-        return LoginOutcome.authenticated(finalizeAdminLogin(user));
+        return LoginOutcome.authenticated(finalizeAdminLogin(user, ipAddress, userAgent, request.getRememberDevice()));
     }
 
-    public AuthResponse verifyTwoFactor(TwoFactorVerifyRequest request) {
+    public AuthResponse verifyTwoFactor(TwoFactorVerifyRequest request, String ipAddress, String userAgent) {
         Long userId = adminEmailOtpService.peekUserId(request.getChallengeId());
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BadRequestException("Account not found"));
@@ -204,7 +212,7 @@ public class AuthService {
             adminEmailOtpService.verify(request.getChallengeId(), request.getCode());
         }
 
-        return finalizeAdminLogin(user);
+        return finalizeAdminLogin(user, ipAddress, userAgent, request.getRememberDevice());
     }
 
     public AuthResponse verifyBackupCode(TwoFactorBackupRequest request, String ipAddress) {
@@ -223,7 +231,7 @@ public class AuthService {
         ensureUserCanAuthenticate(user);
         activityLogService.log(user, Module.DASHBOARD, PermissionAction.VIEW, "Auth", user.getId(),
                 null, null, "Admin login via backup code: " + user.getEmail());
-        return finalizeAdminLogin(user);
+        return finalizeAdminLogin(user, ipAddress, null, false);
     }
 
     public TwoFactorChallengeResponse resendTwoFactor(TwoFactorResendRequest request) {
@@ -240,8 +248,13 @@ public class AuthService {
                 .build();
     }
 
-    private AuthResponse finalizeAdminLogin(User user) {
+    private AuthResponse finalizeAdminLogin(User user, String ipAddress, String userAgent, Boolean rememberDevice) {
         AuthSessionService.SessionToken sessionToken = authSessionService.createSession(user);
+        
+        String trustedDeviceToken = null;
+        if (Boolean.TRUE.equals(rememberDevice)) {
+            trustedDeviceToken = trustedDeviceService.createTrustedDevice(user, ipAddress, userAgent);
+        }
         if (user.getRole() != Role.USER) {
             user.setLastLoginAt(LocalDateTime.now());
             user.setFailedLoginAttempts(0);
@@ -253,13 +266,35 @@ public class AuthService {
         }
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
         String accessToken = jwtService.generateAccessToken(userDetails, sessionToken.session().getId());
-        return toAuthResponse(user, accessToken, sessionToken);
+        
+        AuthResponse response = toAuthResponse(user, accessToken, sessionToken);
+        if (trustedDeviceToken != null) {
+            return AuthResponse.builder()
+                .token(response.getToken())
+                .refreshToken(response.getRefreshToken())
+                .id(response.getId())
+                .name(response.getName())
+                .email(response.getEmail())
+                .phone(response.getPhone())
+                .role(response.getRole())
+                .roleKey(response.getRoleKey())
+                .roleName(response.getRoleName())
+                .sessionId(response.getSessionId())
+                .tokenExpiresAt(response.getTokenExpiresAt())
+                .refreshTokenExpiresAt(response.getRefreshTokenExpiresAt())
+                .visibleModules(response.getVisibleModules())
+                .twoFactorEnabled(response.isTwoFactorEnabled())
+                .permissions(response.getPermissions())
+                .trustedDeviceToken(trustedDeviceToken)
+                .build();
+        }
+        return response;
     }
 
     /** Called by WebAuthnController after successful fingerprint/passkey verification. */
     public AuthResponse loginAsUser(User user, String ipAddress) {
         checkAdminIpWhitelist(user, ipAddress);
-        return finalizeAdminLogin(user);
+        return finalizeAdminLogin(user, ipAddress, null, false);
     }
 
     private void checkAdminIpWhitelist(User user, String ipAddress) {

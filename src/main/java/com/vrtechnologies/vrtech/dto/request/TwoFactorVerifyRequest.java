@@ -17,4 +17,6 @@ public class TwoFactorVerifyRequest {
     @Size(min = 4, max = 8)
     @Pattern(regexp = "^\\d{4,8}$", message = "Code must be 4-8 digits")
     private String code;
+
+    private Boolean rememberDevice;
 }

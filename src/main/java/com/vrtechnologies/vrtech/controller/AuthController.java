@@ -18,6 +18,9 @@ import com.vrtechnologies.vrtech.dto.response.TwoFactorChallengeResponse;
 import com.vrtechnologies.vrtech.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.ResponseCookie;
+import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -40,18 +43,25 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public ApiResponse<Object> login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
-        LoginOutcome outcome = authService.login(request, clientIp(http), userAgent(http));
+    public ApiResponse<Object> login(@Valid @RequestBody LoginRequest request, 
+                                     @CookieValue(name = "VR_TRUSTED_DEVICE", required = false) String trustedDeviceToken,
+                                     HttpServletRequest http, HttpServletResponse response) {
+        LoginOutcome outcome = authService.login(request, clientIp(http), userAgent(http), trustedDeviceToken);
         if (outcome.isTwoFactorRequired()) {
             TwoFactorChallengeResponse challenge = outcome.getTwoFactorChallenge();
             return ApiResponse.ok("Two-factor verification required", challenge);
         }
-        return ApiResponse.ok("Login successful", outcome.getAuthResponse());
+        AuthResponse authResponse = outcome.getAuthResponse();
+        setTrustedDeviceCookie(response, authResponse);
+        return ApiResponse.ok("Login successful", authResponse);
     }
 
     @PostMapping("/2fa/verify")
-    public ApiResponse<AuthResponse> verifyTwoFactor(@Valid @RequestBody TwoFactorVerifyRequest request) {
-        return ApiResponse.ok("Login successful", authService.verifyTwoFactor(request));
+    public ApiResponse<AuthResponse> verifyTwoFactor(@Valid @RequestBody TwoFactorVerifyRequest request, 
+                                                     HttpServletRequest http, HttpServletResponse response) {
+        AuthResponse authResponse = authService.verifyTwoFactor(request, clientIp(http), userAgent(http));
+        setTrustedDeviceCookie(response, authResponse);
+        return ApiResponse.ok("Login successful", authResponse);
     }
 
     @PostMapping("/2fa/resend")
@@ -127,5 +137,18 @@ public class AuthController {
         if (http == null) return null;
         String value = http.getHeader("User-Agent");
         return value == null ? null : value.length() > 250 ? value.substring(0, 250) : value;
+    }
+
+    private void setTrustedDeviceCookie(HttpServletResponse response, AuthResponse authResponse) {
+        if (authResponse != null && authResponse.getTrustedDeviceToken() != null) {
+            ResponseCookie cookie = ResponseCookie.from("VR_TRUSTED_DEVICE", authResponse.getTrustedDeviceToken())
+                    .httpOnly(true)
+                    .secure(true)
+                    .path("/api/auth")
+                    .maxAge(30 * 24 * 60 * 60) // 30 days
+                    .sameSite("Strict")
+                    .build();
+            response.addHeader("Set-Cookie", cookie.toString());
+        }
     }
 }

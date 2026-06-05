@@ -221,6 +221,12 @@ public class SupportChatService {
         final java.math.BigDecimal finalMaxPrice = maxPrice;
         final List<Integer> finalRamOptions = ramOptions;
 
+        // Use-case and OS indicators
+        boolean queryMentionsMac = msg.contains("mac") || msg.contains("apple") || msg.contains("macos") || msg.contains("ios");
+        boolean queryMentionsWindows = msg.contains("windows") || msg.contains("win10") || msg.contains("win11") || msg.contains("win 10") || msg.contains("win 11");
+        boolean queryMentionsGaming = msg.contains("game") || msg.contains("gaming") || msg.contains("gpu") || msg.contains("graphics") || msg.contains("rtx") || msg.contains("gtx");
+        boolean queryMentionsCoding = msg.contains("code") || msg.contains("coding") || msg.contains("program") || msg.contains("developer") || msg.contains("dev") || msg.contains("programming");
+
         for (Product p : allAvailable) {
             // Hard filters
             if (finalMaxPrice != null && p.getPrice() != null && p.getPrice().compareTo(finalMaxPrice) > 0) {
@@ -237,6 +243,7 @@ public class SupportChatService {
             String proc = p.getProcessor() == null ? "" : p.getProcessor().toLowerCase();
             String desc = p.getDescription() == null ? "" : p.getDescription().toLowerCase();
 
+            // 1. Text term matching
             for (String term : searchTerms) {
                 if (brand.contains(term)) score += 10;
                 if (title.contains(term)) score += 5;
@@ -247,6 +254,43 @@ public class SupportChatService {
                 // Match storage terms (e.g. "512", "256")
                 if (p.getStorageGb() != null && term.equals(p.getStorageGb().toString())) {
                     score += 5;
+                }
+            }
+
+            // 2. OS / Platform Boosts
+            if (queryMentionsMac) {
+                if (brand.contains("apple") || category.contains("macbook") || title.contains("macbook") || title.contains("apple")) {
+                    score += 100; // Force-rank matching Macs to the top
+                } else {
+                    score -= 50;  // Demote other systems
+                }
+            }
+            if (queryMentionsWindows) {
+                if (!brand.contains("apple") && !category.contains("macbook") && !title.contains("macbook")) {
+                    score += 50;  // Boost non-Macs
+                } else {
+                    score -= 50;  // Demote Macs
+                }
+            }
+
+            // 3. Gaming Boost
+            if (queryMentionsGaming) {
+                if (category.contains("gaming") || title.contains("gaming") || desc.contains("gaming") ||
+                    (p.getGraphicsCard() != null && !p.getGraphicsCard().trim().isEmpty() && 
+                     !p.getGraphicsCard().toLowerCase().contains("intel iris") && 
+                     !p.getGraphicsCard().toLowerCase().contains("integrated"))) {
+                    score += 40;
+                }
+            }
+
+            // 4. Developer / RAM Boost
+            if (queryMentionsCoding) {
+                // Developers love high RAM (16GB or 32GB)
+                if (p.getRamGb() != null && p.getRamGb() >= 16) {
+                    score += 30;
+                }
+                if (desc.contains("coding") || desc.contains("programming") || desc.contains("developer")) {
+                    score += 20;
                 }
             }
             

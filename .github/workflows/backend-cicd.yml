@@ -117,6 +117,7 @@ jobs:
             echo "REDIS_HOST=${{ secrets.REDIS_HOST || '172.17.0.1' }}"
             echo "REDIS_PORT=${{ secrets.REDIS_PORT || '6379' }}"
             echo "REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}"
+            echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
           } > /tmp/app.env
           echo "Created .env with $(wc -l < /tmp/app.env) variables"
 

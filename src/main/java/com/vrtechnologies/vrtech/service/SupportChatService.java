@@ -266,14 +266,33 @@ public class SupportChatService {
                 .collect(Collectors.toList());
 
         // If no matches found and we had search terms, fallback to top available products
+        boolean noMatchesUnderPrice = false;
         if (filtered.isEmpty()) {
-            filtered = allAvailable.stream().limit(4).collect(Collectors.toList());
+            if (maxPrice != null) {
+                // Fetch available products sorted by price ascending to show the cheapest options
+                filtered = allAvailable.stream()
+                        .sorted(Comparator.comparing(Product::getPrice))
+                        .limit(4)
+                        .collect(Collectors.toList());
+                noMatchesUnderPrice = true;
+            } else {
+                filtered = allAvailable.stream().limit(4).collect(Collectors.toList());
+            }
         }
 
         // 5. Build human-readable reply
-        StringBuilder reply = new StringBuilder("Here are the best refurbished laptops matching your search:");
-        if (maxPrice != null) {
-            reply = new StringBuilder("Here are laptops under ₹" + String.format("%,.0f", maxPrice) + ":");
+        StringBuilder reply = new StringBuilder();
+        if (noMatchesUnderPrice) {
+            java.math.BigDecimal startPrice = filtered.isEmpty() ? java.math.BigDecimal.ZERO : filtered.get(0).getPrice();
+            reply.append("We couldn't find any refurbished laptops under ₹")
+                 .append(String.format("%,.0f", maxPrice))
+                 .append(" in our current inventory. Here are our most affordable options starting at ₹")
+                 .append(String.format("%,.0f", startPrice))
+                 .append(":");
+        } else if (maxPrice != null) {
+            reply.append("Here are laptops under ₹").append(String.format("%,.0f", maxPrice)).append(":");
+        } else {
+            reply.append("Here are the best refurbished laptops matching your search:");
         }
 
         return SupportChatResponse.builder()
